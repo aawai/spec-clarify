@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { html, raw } from "hono/html";
+import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import {
   generatePassword,
@@ -213,6 +214,8 @@ export function createApp(options: AppOptions) {
   app.use(csrf());
 
   app.onError((error, c) => {
+    // Middleware rejections (CSRF) carry their own response; they are not server faults.
+    if (error instanceof HTTPException) return error.getResponse();
     if (error instanceof SourceError) {
       // Nothing is shown or recorded until the sources parse again: records must never attach to
       // an item text that the site can no longer read.
