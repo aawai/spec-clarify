@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-07
+
+### Fixed
+
+- 经 HTTP 用 IP 或主机名访问站点（非 `localhost`、非 HTTPS）时登录及所有表单提交被拒绝：页面的 Referrer 策略由 `no-referrer` 改为 `same-origin`，浏览器提交表单时会带上真实 `Origin`，可以通过同源校验；跨站请求仍不发送 Referer。
+- 跨站表单提交被 CSRF 校验拒绝时返回 403，而不是 500「服务器内部错误」。
+
 ## [0.1.0] - 2026-11-07
 
 ### Added
