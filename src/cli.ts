@@ -33,7 +33,7 @@ const USAGE = `用法：spec-clarify <命令> [选项]
   -c, --config <文件>   项目配置文件，默认 ./${DEFAULT_CONFIG_FILE}
 
 serve 选项（也可用环境变量）：
-  --host <地址>         监听地址，默认 127.0.0.1（SPEC_CLARIFY_HOST）
+  --host <地址>         监听地址，默认 0.0.0.0（SPEC_CLARIFY_HOST）
   --port <端口>         端口，默认 3100（SPEC_CLARIFY_PORT）
   --secure-cookies      会话 Cookie 只经 HTTPS 发送（SPEC_CLARIFY_SECURE_COOKIES=1）
 `;
@@ -114,7 +114,7 @@ async function main(argv: string[]) {
     }
 
     case "serve": {
-      const host = values.host ?? process.env.SPEC_CLARIFY_HOST ?? "127.0.0.1";
+      const host = values.host ?? process.env.SPEC_CLARIFY_HOST ?? "0.0.0.0";
       const port = parsePort(values.port ?? process.env.SPEC_CLARIFY_PORT ?? "3100");
       const secureCookies =
         values["secure-cookies"] ?? process.env.SPEC_CLARIFY_SECURE_COOKIES === "1";

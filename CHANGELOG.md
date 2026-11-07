@@ -9,5 +9,5 @@
 - 一个站点同时澄清多份审核文档（配置 `reviews` 列表），条目编号跨文档唯一，相关条目可跨文档引用。
 - 账号与角色：产品、管理员可提交澄清，工程可评论追问；命令行管理账号，站内修改密码。
 - 记录只追加，带并发保护与条目变更检测；审核文档无法解析时暂停查看与提交。
-- `spec-clarify` 命令行：`serve`、`check`、`export`、`user`。
+- `spec-clarify` 命令行：`serve`、`check`、`export`、`user`；`serve` 默认监听 `0.0.0.0:3100`。
 - Agent Skill `skills/spec-clarify-review`：审核文档的编写约定。
