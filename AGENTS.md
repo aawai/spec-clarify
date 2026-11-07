@@ -50,7 +50,7 @@
 - `src/project.ts`：用 Zod 校验 `spec-clarify.config.json`（路径相对配置文件）；`loadWorkspace` 每次调用都重新读取 `documents` glob 与全部 `reviews`，按配置的适配器解析，多份审核文档时把分组归到各自文档标题下，再交给 `buildReview` 合并；提供按相对路径或唯一文件名解析文档的 `resolve`。
 - `src/review/model.ts`：`ReviewGroup` / `ReviewItem` 模型；`buildReview` 校验跨文档编号与分组键唯一、解析相关条目、计算 digest。
 - `src/review/adapters/`：`markdown.ts`（默认格式）、`prd-review.ts`（中文 PRD 审核报告版式），在 `index.ts` 中以 Zod 选项 schema 注册；适配器只产出 `ParsedReview`，不做跨文档逻辑。
-- `src/render/markdown.ts`：审核文本渲染与 `文件:行号` 引用链接；源文档带行号标注与高亮的渲染。
+- `src/render/markdown.ts`：审核文本渲染与 `文件:行号` 引用链接（可收集已链接的引用）；源文档带行号标注与高亮的渲染。`src/render/excerpt.ts`：按引用截取源文档行及上下文，供条目页“原文对照”。
 - `src/clarification.ts`：由最近一次澄清与评论推导条目状态（未澄清 / 已澄清 / 需复核）与“待回复”。
 - `src/store/`：`database.ts` 建库与 PRAGMA（WAL、外键、锁等待）；`users.ts` 账号与会话；`entries.ts` 记录、并发检查与活动汇总。
 - `src/web/`：`app.ts` 路由、登录守卫、表单处理与错误页；`view.ts` 布局与共享组件；`style.ts` HeroUI 样式与站点 CSS（按内容哈希提供、长期缓存）。
