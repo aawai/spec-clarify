@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { buildReview, type ItemDraft, type Review, type ReviewGroup } from "../model.js";
+import type { ItemDraft, ParsedReview, ReviewGroup } from "../model.js";
 
 /**
  * Default review format:
@@ -27,7 +27,8 @@ const SEVERITY_LABELS = new Set(["严重度", "severity"]);
 const DOCUMENT_LABELS = new Set(["文档", "document"]);
 const RELATED_LABELS = new Set(["相关", "related"]);
 
-export function parseMarkdownReview(source: string): Review {
+/** `path` is the review document's project-relative path; it scopes group keys and line links. */
+export function parseMarkdownReview(source: string, path: string): ParsedReview {
   const lines = source.split("\n");
   const groups: ReviewGroup[] = [];
   const drafts: ItemDraft[] = [];
@@ -53,10 +54,12 @@ export function parseMarkdownReview(source: string): Review {
     if (heading?.[1] === "##") {
       closeItem();
       const title = heading[2]?.trim() ?? "";
-      if (groups.some((existing) => existing.key === title)) {
+      const key = `${path}#${title}`;
+      if (groups.some((existing) => existing.key === key)) {
         throw new Error(`Line ${index + 1}: duplicate group "${title}"`);
       }
-      group = { key: title, title, label: title, section: "分组" };
+      // An empty section lists the group directly under its review document.
+      group = { key, source: path, title, label: title, section: "" };
       groups.push(group);
       continue;
     }
@@ -107,5 +110,5 @@ export function parseMarkdownReview(source: string): Review {
     if (line.trim()) item.draft.endLine = index + 1;
   }
   closeItem();
-  return buildReview(groups, drafts);
+  return { groups, drafts };
 }

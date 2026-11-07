@@ -15,7 +15,8 @@ export function formatTime(iso: string): string {
 
 export interface ExportInput {
   title: string;
-  reviewPath: string;
+  /** Paths of the review documents the items come from. */
+  sources: string[];
   review: Review;
   /** Every entry, in ID order per item. */
   entries: Entry[];
@@ -42,7 +43,7 @@ export function renderExport(input: ExportInput): string {
   const out: string[] = [
     `# ${input.title} 澄清记录`,
     "",
-    `> 根据 \`${input.reviewPath}\` 与澄清数据库生成，生成时间 ${formatTime(input.generatedAt.toISOString())}。条目内容以审核文档为准；本文件记录产品方的澄清与讨论。`,
+    `> 根据 ${input.sources.map((source) => `\`${source}\``).join("、")} 与澄清数据库生成，生成时间 ${formatTime(input.generatedAt.toISOString())}。条目内容以审核文档为准；本文件记录产品方的澄清与讨论。`,
     "",
     "## 汇总",
     "",

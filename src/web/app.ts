@@ -427,7 +427,7 @@ export function createApp(options: AppOptions) {
   const severity = (value: string) => severityChip(value, config.severities);
 
   app.get("/", async (c) => {
-    const { review } = await loadWorkspace(config);
+    const { review, reviews } = await loadWorkspace(config);
     const activity = await entries.activity();
     const filter = parseFilter(c);
     const states = new Map(
@@ -550,8 +550,10 @@ export function createApp(options: AppOptions) {
               <h1>澄清条目</h1>
               <p class="muted">
                 条目来自
-                <a href="${docHref(config.reviewPath)}">${config.reviewPath}</a
-                >。点击条目查看原文位置、提交澄清或参与讨论。
+                ${reviews.map(
+                  (doc, index) =>
+                    html`${index ? "、" : ""}<a href="${docHref(doc.path)}">${doc.path}</a>`,
+                )}。点击条目查看原文位置、提交澄清或参与讨论。
               </p>
             </div>
             <div class="overall">
@@ -739,8 +741,8 @@ ${valueFor("clarification")}</textarea>
           ${item.severity ? severity(item.severity) : ""}
           <span class="muted">${item.group.label}</span>
           <span class="muted">·</span>
-          <a href="${docHref(config.reviewPath, item.line, item.endLine)}"
-            >审核文档第 ${item.line} 行</a
+          <a href="${docHref(item.group.source, item.line, item.endLine)}"
+            >${item.group.source} 第 ${item.line} 行</a
           >
         </div>
         <h1>${plain(item.title)}</h1>
@@ -954,11 +956,11 @@ ${valueFor("comment")}</textarea>
   });
 
   app.get("/export.md", async (c) => {
-    const { review } = await loadWorkspace(config);
+    const { review, reviews } = await loadWorkspace(config);
     const [all, activity] = await Promise.all([entries.all(), entries.activity()]);
     const markdown = renderExport({
       title: config.title,
-      reviewPath: config.reviewPath,
+      sources: reviews.map((doc) => doc.path),
       review,
       entries: all,
       activity,

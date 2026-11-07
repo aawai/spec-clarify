@@ -1,10 +1,9 @@
 import { z } from "zod";
 import {
-  buildReview,
   isDelimiterRow,
   splitTableRow,
   type ItemDraft,
-  type Review,
+  type ParsedReview,
   type ReviewGroup,
 } from "../model.js";
 
@@ -70,7 +69,12 @@ interface Group extends ReviewGroup {
   kind: Kind;
 }
 
-export function parsePrdReview(source: string, options: z.infer<typeof prdReviewOptions>): Review {
+/** `path` is the review document's project-relative path; it scopes group keys and line links. */
+export function parsePrdReview(
+  source: string,
+  path: string,
+  options: z.infer<typeof prdReviewOptions>,
+): ParsedReview {
   const lines = source.split("\n");
   const groups: Group[] = [];
   const drafts: ItemDraft[] = [];
@@ -131,7 +135,8 @@ export function parsePrdReview(source: string, options: z.infer<typeof prdReview
         openGroup(
           section
             ? {
-                key: section.kind,
+                key: `${path}#${section.kind}`,
+                source: path,
                 title: section.title,
                 label: section.title,
                 section: "跨模块",
@@ -163,7 +168,8 @@ export function parsePrdReview(source: string, options: z.infer<typeof prdReview
       openGroup(
         kind && moduleFile
           ? {
-              key: `${moduleFile}/${kind}`,
+              key: `${path}#${moduleFile}/${kind}`,
+              source: path,
               title: `${moduleFile} · ${text}`,
               label: text,
               section: moduleFile,
@@ -242,5 +248,5 @@ export function parsePrdReview(source: string, options: z.infer<typeof prdReview
   }
   closeProse(lines.length);
 
-  return buildReview(groups, drafts);
+  return { groups, drafts };
 }

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parsePrdReview } from "./prd-review.js";
+import type { z } from "zod";
+import { buildReview } from "../model.js";
+import { parsePrdReview as parseDocument, type prdReviewOptions } from "./prd-review.js";
+
+const parsePrdReview = (source: string, adapterOptions: z.infer<typeof prdReviewOptions>) =>
+  buildReview([parseDocument(source, "prd-review.md", adapterOptions)]);
 
 const options = { modules: { "login.md": "L" } };
 
@@ -58,12 +63,12 @@ test("tables, G sections and questions become items numbered by the module prefi
   assert.deepEqual(
     groups.map((group) => [group.key, group.section, group.defaultDocument]),
     [
-      ["contradiction", "跨模块", undefined],
-      ["shared-rule", "跨模块", undefined],
-      ["login.md/issue", "login.md", "login.md"],
-      ["login.md/figure-rule", "login.md", "login.md"],
-      ["login.md/figure-conflict", "login.md", "login.md"],
-      ["login.md/question", "login.md", "login.md"],
+      ["prd-review.md#contradiction", "跨模块", undefined],
+      ["prd-review.md#shared-rule", "跨模块", undefined],
+      ["prd-review.md#login.md/issue", "login.md", "login.md"],
+      ["prd-review.md#login.md/figure-rule", "login.md", "login.md"],
+      ["prd-review.md#login.md/figure-conflict", "login.md", "login.md"],
+      ["prd-review.md#login.md/question", "login.md", "login.md"],
     ],
   );
   const l01 = items.find((item) => item.id === "L01");

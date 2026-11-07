@@ -1,6 +1,6 @@
 # spec-clarify
 
-把一份 Markdown 审核文档拆成条目，交给产品方在线逐条澄清，工程方可以追问，所有记录只追加、可导出。自托管，单个 Node.js 进程加一个 SQLite 文件。
+把 Markdown 审核文档拆成条目，交给产品方在线逐条澄清，工程方可以追问，所有记录只追加、可导出。一个站点可以同时澄清多份审核文档。自托管，单个 Node.js 进程加一个 SQLite 文件。
 
 A self-hosted site that turns a Markdown review of your specs into items for product owners to clarify one by one, with an append-only, exportable record. The UI is in Chinese.
 
@@ -45,13 +45,32 @@ npm run dev
 | --------------------- | ---------------------- | --------------------------------------------------------------------- |
 | `title`               | `规格澄清`             | 站点名称，显示在页头、页面标题和导出文件中                            |
 | `documents`           | `[]`                   | 源文档的 glob 列表，例如 `["specs/**/*.md"]`；审核文档自动加入        |
-| `review.path`         | 必填                   | 审核文档路径                                                          |
-| `review.adapter`      | `markdown`             | 审核文档格式：`markdown`（默认格式）或 `prd-review`（见下文）         |
-| `review.options`      | —                      | 适配器选项                                                            |
+| `reviews`             | 必填，至少一项         | 本站点澄清的审核文档列表，每项字段见下表                              |
 | `severities`          | `[]`                   | 严重度从高到低，例如 `["阻塞", "高", "中", "低"]`；决定颜色与筛选顺序 |
 | `database`            | `data/spec-clarify.db` | SQLite 文件；一个数据库对应一个项目                                   |
 | `trustDocumentHtml`   | `false`                | 渲染源文档中的原始 HTML；只对可信文档开启                             |
 | `allowExternalImages` | `false`                | 允许源文档加载外部图片                                                |
+
+`reviews` 的每一项：
+
+| 字段      | 默认值              | 说明                                                          |
+| --------- | ------------------- | ------------------------------------------------------------- |
+| `path`    | 必填                | 审核文档路径，须在项目目录内，不能重复                        |
+| `title`   | 文档的 `#` 一级标题 | 有多份审核文档时，导航和导出按它把分组归到各自文档下          |
+| `adapter` | `markdown`          | 审核文档格式：`markdown`（默认格式）或 `prd-review`（见下文） |
+| `options` | —                   | 适配器选项                                                    |
+
+```json
+{
+  "documents": ["specs/**/*.md"],
+  "reviews": [
+    { "path": "reviews/product.md", "title": "产品审核" },
+    { "path": "reviews/security.md", "title": "安全审核" }
+  ]
+}
+```
+
+多份审核文档共用一套账号、进度和导出。条目编号必须在**所有**审核文档中唯一：澄清记录只按编号保存，重复时站点拒绝加载并指出两处位置。“相关”可以引用其他审核文档的条目。任意一份审核文档无法解析，整个站点都会暂停。
 
 ## 审核文档格式
 
@@ -68,7 +87,7 @@ npm run dev
 :7 规定输错 5 次锁定，但没有写锁定多久。
 ```
 
-- `##` 是分组，分组内每个 `###` 是一个条目，标题必须以编号开头。编号全文唯一，发布后不再改动：澄清记录按编号保存。
+- `##` 是分组，分组内每个 `###` 是一个条目，标题必须以编号开头。编号在站点的所有审核文档中唯一，发布后不再改动：澄清记录按编号保存。
 - 标题后的 `- 键：值` 列表是元数据：`严重度`、`文档`（不带文件名的 `:行号` 指向它）、`相关`，其余键作为字段显示。
 - 行号引用：`specs/login.md:12`、`:12`、`:12–20`、`:12、15`、`图@:12`。
 
@@ -80,11 +99,13 @@ npm run dev
 
 ```json
 {
-  "review": {
-    "path": "docs/prd-review.md",
-    "adapter": "prd-review",
-    "options": { "modules": { "login.md": "L", "account.md": "A" } }
-  }
+  "reviews": [
+    {
+      "path": "docs/prd-review.md",
+      "adapter": "prd-review",
+      "options": { "modules": { "login.md": "L", "account.md": "A" } }
+    }
+  ]
 }
 ```
 

@@ -83,23 +83,23 @@ async function main(argv: string[]) {
 
   switch (command) {
     case "check": {
-      const { review, documents } = await loadWorkspace(config);
+      const { review, reviews, documents } = await loadWorkspace(config);
       for (const group of review.groups) {
         const count = review.items.filter((item) => item.group === group).length;
         console.log(`${String(count).padStart(5)}  ${group.title}`);
       }
       console.log(
-        `共 ${review.items.length} 个条目、${review.groups.length} 个分组、${documents.length} 份文档`,
+        `共 ${review.items.length} 个条目、${review.groups.length} 个分组；${reviews.length} 份审核文档、${documents.length - reviews.length} 份源文档`,
       );
       return;
     }
 
     case "export": {
-      const { review } = await loadWorkspace(config);
+      const { review, reviews } = await loadWorkspace(config);
       const markdown = await withStores(config, async ({ entries }) =>
         renderExport({
           title: config.title,
-          reviewPath: config.reviewPath,
+          sources: reviews.map((doc) => doc.path),
           review,
           entries: await entries.all(),
           activity: await entries.activity(),

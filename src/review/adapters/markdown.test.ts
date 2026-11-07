@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseMarkdownReview } from "./markdown.js";
+import { buildReview } from "../model.js";
+import { parseMarkdownReview as parseDocument } from "./markdown.js";
+
+const parseMarkdownReview = (source: string) => buildReview([parseDocument(source, "review.md")]);
 
 const SOURCE = `# 审核
 
@@ -63,7 +66,7 @@ test("rejects item headings without an ID, items outside a group and duplicate I
   assert.throws(() => parseMarkdownReview("### A1 无分组\n"), /outside of a "##" group/);
   assert.throws(
     () => parseMarkdownReview("## 组\n\n### A1 一\n\n### A1 二\n"),
-    /Duplicate item ID A1 at line 5/,
+    /Duplicate item ID A1: review.md:3 and review.md:5/,
   );
 });
 

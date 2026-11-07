@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 
 export interface ReviewGroup {
-  /** Stable key used in URLs and filters. */
+  /** Stable key used in URLs and filters; unique across all review documents of a project. */
   key: string;
+  /** Path of the review document the group comes from, relative to the project root. */
+  source: string;
   /** Full title, used in breadcrumbs, item lists and the export. */
   title: string;
   /** Short label shown in the navigation under `section`. */
@@ -28,11 +30,11 @@ export interface ReviewItem {
   fields: ReviewField[];
   /** Block Markdown. */
   body?: string;
-  /** IDs of other items this item names; only IDs that exist in the review are kept. */
+  /** IDs of other items this item names; only IDs that exist in the project are kept. */
   related: string[];
   /** Overrides the group's default document for bare line references. */
   defaultDocument?: string;
-  /** 1-based line range of the item in the review document. */
+  /** 1-based line range of the item in its review document (`group.source`). */
   line: number;
   endLine: number;
   /** Changes whenever the item's content changes; whitespace and table alignment do not count. */
@@ -48,6 +50,12 @@ export interface Review {
 export interface ItemDraft extends Omit<ReviewItem, "related" | "digest"> {
   /** Free text that may name other items, e.g. a "related" column. */
   relatedText: string[];
+}
+
+/** Output of an adapter for one review document. */
+export interface ParsedReview {
+  groups: ReviewGroup[];
+  drafts: ItemDraft[];
 }
 
 function normalize(text: string): string {
@@ -66,14 +74,27 @@ function digestOf(draft: ItemDraft): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
-/** Validates item IDs and derives `related` and `digest` the same way for every adapter. */
-export function buildReview(groups: ReviewGroup[], drafts: ItemDraft[]): Review {
-  const known = new Set<string>();
+/**
+ * Merges the review documents of a project. Item IDs must be unique across all of them, because
+ * clarification records are keyed by ID alone; related items may live in any document.
+ */
+export function buildReview(parts: ParsedReview[]): Review {
+  const groups = parts.flatMap((part) => part.groups);
+  const drafts = parts.flatMap((part) => part.drafts);
+  const known = new Map<string, ItemDraft>();
   for (const draft of drafts) {
-    if (known.has(draft.id)) {
-      throw new Error(`Duplicate item ID ${draft.id} at line ${draft.line}`);
+    const previous = known.get(draft.id);
+    if (previous) {
+      throw new Error(
+        `Duplicate item ID ${draft.id}: ${previous.group.source}:${previous.line} and ${draft.group.source}:${draft.line}`,
+      );
     }
-    known.add(draft.id);
+    known.set(draft.id, draft);
+  }
+  const groupKeys = new Set<string>();
+  for (const group of groups) {
+    if (groupKeys.has(group.key)) throw new Error(`Duplicate group ${group.key}`);
+    groupKeys.add(group.key);
   }
   const items = drafts.map(({ relatedText, ...draft }): ReviewItem => {
     const related = new Set<string>();

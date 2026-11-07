@@ -1,24 +1,26 @@
 import { z } from "zod";
-import type { Review } from "../model.js";
+import type { ParsedReview } from "../model.js";
 import { markdownOptions, parseMarkdownReview } from "./markdown.js";
 import { parsePrdReview, prdReviewOptions } from "./prd-review.js";
 
-export type ReviewParser = (source: string) => Review;
+/** Parses one review document; `path` is its project-relative path. */
+export type ReviewParser = (source: string, path: string) => ParsedReview;
 
 function adapter<S extends z.ZodType>(
   options: S,
-  parse: (source: string, options: z.infer<S>) => Review,
+  parse: (source: string, path: string, options: z.infer<S>) => ParsedReview,
 ) {
   return (raw: unknown): ReviewParser => {
     const parsed = options.safeParse(raw ?? {});
-    if (!parsed.success)
+    if (!parsed.success) {
       throw new Error(`Invalid adapter options: ${z.prettifyError(parsed.error)}`);
-    return (source) => parse(source, parsed.data);
+    }
+    return (source, path) => parse(source, path, parsed.data);
   };
 }
 
 export const ADAPTERS = {
-  markdown: adapter(markdownOptions, (source) => parseMarkdownReview(source)),
+  markdown: adapter(markdownOptions, (source, path) => parseMarkdownReview(source, path)),
   "prd-review": adapter(prdReviewOptions, parsePrdReview),
 };
 

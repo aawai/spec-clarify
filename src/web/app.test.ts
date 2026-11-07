@@ -42,7 +42,7 @@ async function withSite(
     join(dir, "spec-clarify.config.json"),
     JSON.stringify({
       documents: ["specs/*.md"],
-      review: { path: "review.md" },
+      reviews: [{ path: "review.md" }],
       database: "db.sqlite",
     }),
   );
