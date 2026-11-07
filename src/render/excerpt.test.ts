@@ -19,7 +19,7 @@ const shape = (excerpts: Excerpt[]) =>
         `${window.start}-${window.end} hits ${window.lines
           .filter((line) => line.hit)
           .map((line) => line.number)
-          .join(",")}${window.hiddenLines ? ` hidden ${window.hiddenLines}` : ""}`,
+          .join(",")}`,
     ),
   }));
 
@@ -56,12 +56,19 @@ test("context stops at the start and end of the document", () => {
   );
 });
 
-test("a long referenced range is cut short and reports the lines left out", () => {
+test("a long referenced range keeps both of its ends and leaves out the middle", () => {
   const [excerpt] = buildExcerpts([{ path: "a.md", start: 5, end: 90 }], source);
-  const [window] = excerpt?.windows ?? [];
-  assert.equal(window?.start, 2);
-  assert.equal(window?.lines.length, 40);
-  assert.equal(window?.hiddenLines, 93 - 2 + 1 - 40);
+  const windows = excerpt?.windows ?? [];
+  assert.deepEqual(
+    windows.map((window) => [window.start, window.end, window.lines.length]),
+    [
+      [2, 21, 20],
+      [74, 93, 20],
+    ],
+  );
+  const hits = windows.flatMap((window) => window.lines.filter((line) => line.hit));
+  assert.equal(hits.at(0)?.number, 5);
+  assert.equal(hits.at(-1)?.number, 90);
 });
 
 test("references to unknown documents are skipped", () => {
