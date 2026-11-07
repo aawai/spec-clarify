@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { test } from "node:test";
 import { hashPassword } from "../auth.js";
 import { loadProjectConfig } from "../project.js";
@@ -221,5 +222,61 @@ test("a clarification against an edited item is refused, and removed items keep 
     await writeReview(REVIEW.replace("### A3 退出日志\n", ""));
     const exported = await (await app.request("/export.md", { headers: { Cookie: pm } })).text();
     assert.match(exported, /## 已从审核文档移除的条目\n\n### A3\n\n- .* 产品 澄清：\n {2}> 需要/);
+  });
+});
+
+test("pages are sent gzip-compressed to browsers that accept it", async () => {
+  await withSite(async ({ app }) => {
+    const pm = await signIn(app, "pm");
+    const response = await app.request("/", {
+      headers: { Cookie: pm, "Accept-Encoding": "gzip, deflate, br" },
+    });
+    assert.equal(response.headers.get("Content-Encoding"), "gzip");
+    const page = gunzipSync(Buffer.from(await response.arrayBuffer())).toString("utf8");
+    assert.match(page, /A1/);
+
+    const plain = await app.request("/", { headers: { Cookie: pm } });
+    assert.equal(plain.headers.get("Content-Encoding"), null);
+  });
+});
+
+test("an item page shows the referenced source lines with their context", async () => {
+  await withSite(async ({ app }) => {
+    const pm = await signIn(app, "pm");
+    const page = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    const excerpt = /<section[^>]*id="sources"[\s\S]*?<\/section>/.exec(page)?.[0] ?? "";
+    assert.match(excerpt, /specs\/login\.md/);
+    const lines = [
+      ...excerpt.matchAll(/<div class="excerpt__line( is-hit)?"[^>]*>([\s\S]*?)<\/div>/g),
+    ].map(([, hit, row = ""]) => `${hit ? "*" : " "}${row.replace(/<[^>]+>/g, "").trim()}`);
+    assert.deepEqual(lines, [" 1# 登录", " 2", "*3输错 5 次锁定。", " 4"]);
+
+    const plain = await (await app.request("/items/A2", { headers: { Cookie: pm } })).text();
+    assert.doesNotMatch(plain, /id="sources"/);
+  });
+});
+
+test("提交并下一条 records the clarification and moves on to the next item in the filter", async () => {
+  await withSite(async ({ app, entries }) => {
+    const pm = await signIn(app, "pm");
+    const { digest } = await formValues(app, pm, "A1");
+    const submitted = await post(app, pm, "/items/A1/clarifications?status=open", {
+      body: "锁定 30 分钟",
+      digest,
+      base: "0",
+      after: "next",
+    });
+    assert.equal(submitted.status, 303);
+    assert.equal(submitted.headers.get("Location"), "/items/A2?status=open");
+    assert.equal((await entries.entriesFor("A1")).length, 1);
+
+    const last = await formValues(app, pm, "A3");
+    const atEnd = await post(app, pm, "/items/A3/clarifications?status=open", {
+      body: "需要",
+      digest: last.digest,
+      base: "0",
+      after: "next",
+    });
+    assert.match(atEnd.headers.get("Location") ?? "", /^\/items\/A3\?status=open#entry-\d+$/);
   });
 });

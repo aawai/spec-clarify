@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { compress } from "hono/compress";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { html, raw } from "hono/html";
@@ -28,8 +29,9 @@ import {
   docHref,
   type RefEnv,
 } from "../render/markdown.js";
+import { buildExcerpts, type DocRef, type Excerpt } from "../render/excerpt.js";
 import type { ReviewGroup, ReviewItem } from "../review/model.js";
-import { ENTRY_LABELS, type Entry, type EntryStore } from "../store/entries.js";
+import { ENTRY_LABELS, type Entry, type EntryStore, type ItemActivity } from "../store/entries.js";
 import { canClarify, ROLE_LABELS, type User, type UserStore } from "../store/users.js";
 import { STYLESHEETS } from "./style.js";
 import {
@@ -93,6 +95,8 @@ const EntryForm = z.object({
   body: Body,
   digest: z.string().min(1),
   base: z.optional(z.coerce.number().int().min(0)),
+  /** `next`: after a clarification, continue with the next item in the current filter. */
+  after: z.literal("next").optional(),
 });
 const LoginForm = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
 const PasswordForm = z
@@ -152,6 +156,23 @@ function matchesFilter(item: ReviewItem, state: ItemState, filter: ListFilter): 
   );
 }
 
+/**
+ * The item after `index` in review order that matches `filter`. Found by review position because
+ * the current item may itself have just left the filter (e.g. clarified while viewing 未澄清).
+ */
+function nextInFilter(
+  items: ReviewItem[],
+  index: number,
+  filter: ListFilter,
+  activity: Map<string, ItemActivity>,
+): ReviewItem | undefined {
+  return items
+    .slice(index + 1)
+    .find((candidate) =>
+      matchesFilter(candidate, itemState(candidate, activity.get(candidate.id)), filter),
+    );
+}
+
 /** Groups in review order, gathered under their navigation section. */
 function groupSections(groups: ReviewGroup[]): { title: string; groups: ReviewGroup[] }[] {
   const sections: { title: string; groups: ReviewGroup[] }[] = [];
@@ -171,6 +192,50 @@ function safeNext(next: string | undefined): string {
 function text(form: Record<string, unknown>, key: string): string {
   const value = form[key];
   return typeof value === "string" ? value : "";
+}
+
+/** Referenced source lines, one column per document so conflicting passages sit side by side. */
+function excerptsView(excerpts: Excerpt[]): Html {
+  return html`<section class="card card--default card--padded" id="sources">
+    <h2 class="section-title">原文对照</h2>
+    <div class="excerpts">
+      ${excerpts.map(
+        (excerpt) =>
+          html`<div class="excerpt">
+            <a class="excerpt__file mono" href="${docHref(excerpt.path)}">${excerpt.path}</a>
+            ${excerpt.windows.map(
+              (window, index) =>
+                html`${
+                    index
+                      ? html`<p class="excerpt__gap">
+                          省略第 ${(excerpt.windows[index - 1]?.end ?? 0) + 1}–${window.start - 1}
+                          行
+                        </p>`
+                      : ""
+                  }
+                  <div class="excerpt__lines">
+                    ${window.lines.map(
+                      (line) =>
+                        html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
+                          <span class="excerpt__number">${line.number}</span
+                          ><span class="excerpt__text">${line.text}</span>
+                        </div>`,
+                    )}
+                  </div>
+                  ${
+                    window.hiddenLines
+                      ? html`<a
+                          class="excerpt__more"
+                          href="${docHref(excerpt.path, window.start, window.end)}"
+                          >其余 ${window.hiddenLines} 行在文档中查看</a
+                        >`
+                      : ""
+                  }`,
+            )}
+          </div>`,
+      )}
+    </div>
+  </section>`;
 }
 
 export function createApp(options: AppOptions) {
@@ -202,6 +267,9 @@ export function createApp(options: AppOptions) {
       status,
     );
 
+  // The item list for a few hundred items is several hundred KB of HTML; compressed it is a
+  // small fraction of that, which matters on slow office networks.
+  app.use(compress());
   app.use(async (c, next) => {
     await next();
     const images = config.allowExternalImages ? "* data:" : "'self' data:";
@@ -626,7 +694,15 @@ export function createApp(options: AppOptions) {
     ]);
     const clarification = history.filter((entry) => entry.kind === "clarification").at(-1);
     const { status, awaitingReply } = itemState(item, activity.get(item.id));
-    const env = refEnv(workspace, item);
+    // Review text is rendered before the page so the references it links can be excerpted.
+    const refs: DocRef[] = [];
+    const env: RefEnv = { ...refEnv(workspace, item), refs };
+    const fields = item.fields.map((field) => ({
+      label: field.label,
+      value: inline(field.value, env),
+    }));
+    const reviewBody = item.body ? raw(reviewMd.render(item.body, env)) : undefined;
+    const excerpts = buildExcerpts(refs, (path) => workspace.resolve(path)?.source);
     const backlinks = items
       .filter((other) => other.related.includes(item.id))
       .map((other) => other.id);
@@ -637,7 +713,7 @@ export function createApp(options: AppOptions) {
       matchesFilter(candidate, itemState(candidate, activity.get(candidate.id)), filter);
     const matching = items.filter(inFilter);
     const previous = items.slice(0, index).filter(inFilter).at(-1);
-    const next = items.slice(index + 1).find(inFilter);
+    const next = nextInFilter(items, index, filter, activity);
     const position = matching.indexOf(item);
 
     const itemHref = (target: string) => `/items/${encodeURIComponent(target)}${search}`;
@@ -707,7 +783,22 @@ ${valueFor("clarification")}</textarea>
               >以 ${user.displayName} 的名义提交。记录只追加，更正请再提交一次。</span
             >
           </label>
-          <button class="button button--primary button--full-width" type="submit">
+          ${
+            next
+              ? html`<button
+                  class="button button--primary button--full-width"
+                  type="submit"
+                  name="after"
+                  value="next"
+                >
+                  ${clarification ? "更新并下一条" : "提交并下一条"}
+                </button>`
+              : ""
+          }
+          <button
+            class="button ${next ? "button--secondary" : "button--primary"} button--full-width"
+            type="submit"
+          >
             ${clarification ? "更新澄清" : "提交澄清"}
           </button>
         </form>`
@@ -756,20 +847,21 @@ ${valueFor("clarification")}</textarea>
           <section class="card card--default card--padded">
             <h2 class="section-title">审核意见</h2>
             ${
-              item.fields.length
+              fields.length
                 ? html`<dl class="fields">
-                    ${item.fields.map(
+                    ${fields.map(
                       (field) =>
                         html`<dt>${field.label}</dt>
-                          <dd>${inline(field.value, env)}</dd>`,
+                          <dd>${field.value}</dd>`,
                     )}
                   </dl>`
                 : ""
             }
-            ${item.body ? html`<div class="prose">${raw(reviewMd.render(item.body, env))}</div>` : ""}
+            ${reviewBody ? html`<div class="prose">${reviewBody}</div>` : ""}
             ${item.related.length ? html`<div class="links-row"><span class="muted">相关条目</span>${idLinks(item.related)}</div>` : ""}
             ${backlinks.length ? html`<div class="links-row"><span class="muted">被以下条目引用</span>${idLinks(backlinks)}</div>` : ""}
           </section>
+          ${excerpts.length ? excerptsView(excerpts) : ""}
           <section class="card card--default card--padded">
             <h2 class="section-title">处理记录（${history.length}）</h2>
             ${
@@ -841,9 +933,9 @@ ${valueFor("comment")}</textarea>
     const form = parsed.data;
     if (kind === "clarification" && form.base === undefined) return fail("缺少基准澄清编号", 422);
 
-    const item = (await loadWorkspace(config)).review.items.find(
-      (candidate) => candidate.id === id,
-    );
+    const { items } = (await loadWorkspace(config)).review;
+    const index = items.findIndex((candidate) => candidate.id === id);
+    const item = items[index];
     if (!item) return renderItem(c, id);
     if (kind === "clarification" && form.digest !== item.digest) {
       return fail("审核文档中的本条目已更新，请阅读最新内容后再提交澄清。你的内容已保留。", 409);
@@ -864,8 +956,14 @@ ${valueFor("comment")}</textarea>
         409,
       );
     }
+    const filter = parseFilter(c);
+    if (kind === "clarification" && form.after === "next") {
+      const next = nextInFilter(items, index, filter, await entries.activity());
+      if (next)
+        return c.redirect(`/items/${encodeURIComponent(next.id)}${filterSearch(filter)}`, 303);
+    }
     return c.redirect(
-      `/items/${encodeURIComponent(item.id)}${filterSearch(parseFilter(c))}#entry-${result.entry.id}`,
+      `/items/${encodeURIComponent(item.id)}${filterSearch(filter)}#entry-${result.entry.id}`,
       303,
     );
   };

@@ -58,6 +58,17 @@ test("leaves clock times, URLs, ambiguous or unknown files and out-of-range line
   assert.deepEqual(links("`login.md:5`"), []);
 });
 
+test("collects the references it links, in text order", () => {
+  const env: RefEnv = { defaultDocument: "prd/login.md", resolve, refs: [] };
+  md.render("account.md:110 vs :7–9、12；login.md:999\n\n见 :3", env);
+  assert.deepEqual(env.refs, [
+    { path: "prd/account.md", start: 110, end: 110 },
+    { path: "prd/account.md", start: 7, end: 9 },
+    { path: "prd/account.md", start: 12, end: 12 },
+    { path: "prd/login.md", start: 3, end: 3 },
+  ]);
+});
+
 test("highlights the innermost blocks of the requested lines and anchors the first", () => {
   const source = "# 标题\n\n- 第一项\n- 第二项\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n";
   const renderer = createDocumentRenderer({ trustHtml: false });
