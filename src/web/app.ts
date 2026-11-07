@@ -29,6 +29,7 @@ import {
   docHref,
   type RefEnv,
 } from "../render/markdown.js";
+import { buildExcerpts, type DocRef, type Excerpt } from "../render/excerpt.js";
 import type { ReviewGroup, ReviewItem } from "../review/model.js";
 import { ENTRY_LABELS, type Entry, type EntryStore } from "../store/entries.js";
 import { canClarify, ROLE_LABELS, type User, type UserStore } from "../store/users.js";
@@ -172,6 +173,50 @@ function safeNext(next: string | undefined): string {
 function text(form: Record<string, unknown>, key: string): string {
   const value = form[key];
   return typeof value === "string" ? value : "";
+}
+
+/** Referenced source lines, one column per document so conflicting passages sit side by side. */
+function excerptsView(excerpts: Excerpt[]): Html {
+  return html`<section class="card card--default card--padded" id="sources">
+    <h2 class="section-title">原文对照</h2>
+    <div class="excerpts">
+      ${excerpts.map(
+        (excerpt) =>
+          html`<div class="excerpt">
+            <a class="excerpt__file mono" href="${docHref(excerpt.path)}">${excerpt.path}</a>
+            ${excerpt.windows.map(
+              (window, index) =>
+                html`${
+                    index
+                      ? html`<p class="excerpt__gap">
+                          省略第 ${(excerpt.windows[index - 1]?.end ?? 0) + 1}–${window.start - 1}
+                          行
+                        </p>`
+                      : ""
+                  }
+                  <div class="excerpt__lines">
+                    ${window.lines.map(
+                      (line) =>
+                        html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
+                          <span class="excerpt__number">${line.number}</span
+                          ><span class="excerpt__text">${line.text}</span>
+                        </div>`,
+                    )}
+                  </div>
+                  ${
+                    window.hiddenLines
+                      ? html`<a
+                          class="excerpt__more"
+                          href="${docHref(excerpt.path, window.start, window.end)}"
+                          >其余 ${window.hiddenLines} 行在文档中查看</a
+                        >`
+                      : ""
+                  }`,
+            )}
+          </div>`,
+      )}
+    </div>
+  </section>`;
 }
 
 export function createApp(options: AppOptions) {
@@ -630,7 +675,15 @@ export function createApp(options: AppOptions) {
     ]);
     const clarification = history.filter((entry) => entry.kind === "clarification").at(-1);
     const { status, awaitingReply } = itemState(item, activity.get(item.id));
-    const env = refEnv(workspace, item);
+    // Review text is rendered before the page so the references it links can be excerpted.
+    const refs: DocRef[] = [];
+    const env: RefEnv = { ...refEnv(workspace, item), refs };
+    const fields = item.fields.map((field) => ({
+      label: field.label,
+      value: inline(field.value, env),
+    }));
+    const reviewBody = item.body ? raw(reviewMd.render(item.body, env)) : undefined;
+    const excerpts = buildExcerpts(refs, (path) => workspace.resolve(path)?.source);
     const backlinks = items
       .filter((other) => other.related.includes(item.id))
       .map((other) => other.id);
@@ -760,20 +813,21 @@ ${valueFor("clarification")}</textarea>
           <section class="card card--default card--padded">
             <h2 class="section-title">审核意见</h2>
             ${
-              item.fields.length
+              fields.length
                 ? html`<dl class="fields">
-                    ${item.fields.map(
+                    ${fields.map(
                       (field) =>
                         html`<dt>${field.label}</dt>
-                          <dd>${inline(field.value, env)}</dd>`,
+                          <dd>${field.value}</dd>`,
                     )}
                   </dl>`
                 : ""
             }
-            ${item.body ? html`<div class="prose">${raw(reviewMd.render(item.body, env))}</div>` : ""}
+            ${reviewBody ? html`<div class="prose">${reviewBody}</div>` : ""}
             ${item.related.length ? html`<div class="links-row"><span class="muted">相关条目</span>${idLinks(item.related)}</div>` : ""}
             ${backlinks.length ? html`<div class="links-row"><span class="muted">被以下条目引用</span>${idLinks(backlinks)}</div>` : ""}
           </section>
+          ${excerpts.length ? excerptsView(excerpts) : ""}
           <section class="card card--default card--padded">
             <h2 class="section-title">处理记录（${history.length}）</h2>
             ${

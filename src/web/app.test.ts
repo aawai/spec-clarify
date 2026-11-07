@@ -239,3 +239,19 @@ test("pages are sent gzip-compressed to browsers that accept it", async () => {
     assert.equal(plain.headers.get("Content-Encoding"), null);
   });
 });
+
+test("an item page shows the referenced source lines with their context", async () => {
+  await withSite(async ({ app }) => {
+    const pm = await signIn(app, "pm");
+    const page = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    const excerpt = /<section[^>]*id="sources"[\s\S]*?<\/section>/.exec(page)?.[0] ?? "";
+    assert.match(excerpt, /specs\/login\.md/);
+    const lines = [
+      ...excerpt.matchAll(/<div class="excerpt__line( is-hit)?"[^>]*>([\s\S]*?)<\/div>/g),
+    ].map(([, hit, row = ""]) => `${hit ? "*" : " "}${row.replace(/<[^>]+>/g, "").trim()}`);
+    assert.deepEqual(lines, [" 1# 登录", " 2", "*3输错 5 次锁定。", " 4"]);
+
+    const plain = await (await app.request("/items/A2", { headers: { Cookie: pm } })).text();
+    assert.doesNotMatch(plain, /id="sources"/);
+  });
+});

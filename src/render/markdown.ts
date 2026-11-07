@@ -1,6 +1,7 @@
 import MarkdownIt from "markdown-it";
 import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
 import type Token from "markdown-it/lib/token.mjs";
+import type { DocRef } from "./excerpt.js";
 
 export interface RefTarget {
   path: string;
@@ -12,6 +13,8 @@ export interface RefEnv {
   defaultDocument?: string;
   /** Resolves a document name from the review text; unresolved references stay plain text. */
   resolve(name: string): RefTarget | undefined;
+  /** When set, every reference that became a link is appended here, in text order. */
+  refs?: DocRef[];
 }
 
 /**
@@ -88,6 +91,7 @@ function linkRefs(state: StateCore) {
             return;
           }
           const open = new state.Token("link_open", "a", 1);
+          env.refs?.push({ path: target.path, start, end });
           open.attrSet("href", docHref(target.path, start, end));
           open.attrSet("class", "ref");
           children.push(open);

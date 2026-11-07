@@ -5,7 +5,7 @@
 A self-hosted site that turns a Markdown review of your specs into items for product owners to clarify one by one, with an append-only, exportable record. The UI is in Chinese.
 
 - 条目内容以仓库里的审核文档为准，站点只保存澄清与讨论；文档改动后刷新即可，无需重启。
-- 审核意见中的 `文件:行号` 可点击，跳到源文档对应行并高亮。
+- 审核意见中的 `文件:行号` 可点击，跳到源文档对应行并高亮；条目页同时在“原文对照”中按文档并排列出被引用的行及上下各 3 行，冲突的两处原文不用分别打开即可对照。
 - 条目在澄清后被修改，自动标为“需复核”；工程方追问后、产品方回复前，标为“待回复”。
 - 账号登录，角色分为产品、工程、管理员；只有产品和管理员能提交澄清。
 - 页面不运行任何脚本，CSP 严格；样式来自本地提供的 [HeroUI](https://heroui.com) 预编译 CSS。
