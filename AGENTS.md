@@ -24,7 +24,7 @@
 
 - spec-clarify 是自托管的审核意见澄清站点：把一个项目的一份或多份 Markdown 审核文档拆成条目，产品方逐条澄清，工程方评论追问，记录只追加、可导出为 Markdown。界面为中文。
 - 运行形态：单个 Node.js 进程加一个 SQLite 文件，一个配置文件 / 数据库对应一个项目；页面服务端渲染，不运行客户端脚本。
-- 分发方式：Apache-2.0 公开仓库，使用方以 git 依赖安装并固定到发布 tag 或具体提交（安装时由 `prepare` 构建 `dist/`）；未发布到 npm，版本以 GitHub Release（tag `v<package.json 版本>`）发布，当前为 `v0.1.1`。
+- 分发方式：Apache-2.0 公开仓库，使用方以 git 依赖安装并固定到发布 tag 或具体提交（安装时由 `prepare` 构建 `dist/`）；未发布到 npm，版本以 GitHub Release（tag `v<package.json 版本>`）发布，当前为 `v0.1.2`。
 - 技术栈：TypeScript、Hono（`@hono/node-server`）、Zod、markdown-it、`@libsql/client`（SQLite）、`@heroui/styles` 预编译 CSS；Oxc 工具链使用 Oxlint、Oxfmt 和基于 Rolldown 的 tsdown，类型检查用 TypeScript `tsc`。
 
 ## 契约来源
@@ -50,7 +50,7 @@
 - `src/project.ts`：用 Zod 校验 `spec-clarify.config.json`（路径相对配置文件）；`loadWorkspace` 每次调用都重新读取 `documents` glob 与全部 `reviews`，按配置的适配器解析，多份审核文档时把分组归到各自文档标题下，再交给 `buildReview` 合并；提供按相对路径或唯一文件名解析文档的 `resolve`。
 - `src/review/model.ts`：`ReviewGroup` / `ReviewItem` 模型；`buildReview` 校验跨文档编号与分组键唯一、解析相关条目、计算 digest。
 - `src/review/adapters/`：`markdown.ts`（默认格式）、`prd-review.ts`（中文 PRD 审核报告版式），在 `index.ts` 中以 Zod 选项 schema 注册；适配器只产出 `ParsedReview`，不做跨文档逻辑。
-- `src/render/markdown.ts`：审核文本渲染与 `文件:行号` 引用链接；源文档带行号标注与高亮的渲染。
+- `src/render/markdown.ts`：审核文本渲染与 `文件:行号` 引用链接（可收集已链接的引用）；源文档带行号标注与高亮的渲染。`src/render/excerpt.ts`：按引用截取源文档行及上下文，供条目页“原文对照”。
 - `src/clarification.ts`：由最近一次澄清与评论推导条目状态（未澄清 / 已澄清 / 需复核）与“待回复”。
 - `src/store/`：`database.ts` 建库与 PRAGMA（WAL、外键、锁等待）；`users.ts` 账号与会话；`entries.ts` 记录、并发检查与活动汇总。
 - `src/web/`：`app.ts` 路由、登录守卫、表单处理与错误页；`view.ts` 布局与共享组件；`style.ts` HeroUI 样式与站点 CSS（按内容哈希提供、长期缓存）。
