@@ -31,6 +31,7 @@ async function withSite(
   run: (site: {
     app: ReturnType<typeof createApp>;
     writeReview: (source: string) => Promise<void>;
+    writeDocument: (name: string, source: string) => Promise<void>;
     entries: EntryStore;
   }) => Promise<void>,
 ) {
@@ -56,7 +57,12 @@ async function withSite(
     await users.create({ username: "pm", displayName: "产品", role: "product", passwordHash });
     await users.create({ username: "dev", displayName: "开发", role: "engineer", passwordHash });
     const entries = new EntryStore(client);
-    await run({ app: createApp({ config, entries, users }), writeReview, entries });
+    await run({
+      app: createApp({ config, entries, users }),
+      writeReview,
+      writeDocument: (name, source) => writeFile(join(dir, "specs", name), source),
+      entries,
+    });
   } finally {
     client.close();
     await rm(dir, { recursive: true, force: true });
@@ -99,6 +105,31 @@ async function formValues(app: ReturnType<typeof createApp>, cookie: string, id:
     base: /name="base" value="([^"]+)"/.exec(page)?.[1],
   };
 }
+
+test("document links show titles while retaining their path and line targets", async () => {
+  await withSite(async ({ app }) => {
+    const cookie = await signIn(app, "pm");
+    const detail = await (await app.request("/items/A1", { headers: { Cookie: cookie } })).text();
+    assert.match(detail, /review\.md&amp;line=5&amp;end=8#hl"[^>]*>\s*审核 第 5 行/);
+    assert.match(detail, /specs%2Flogin\.md&amp;line=3&amp;end=3#hl" class="ref">登录:3/);
+    assert.match(detail, /href="\/docs\/view\?path=specs%2Flogin\.md"\s*>登录<\/a\s*>/);
+    const list = await (await app.request("/", { headers: { Cookie: cookie } })).text();
+    assert.match(list, /href="\/docs\/view\?path=review\.md"\s*>审核<\/a\s*>/);
+  });
+});
+
+test("duplicate and missing document titles retain paths to distinguish references", async () => {
+  await withSite(async ({ app, writeDocument, writeReview }) => {
+    await writeDocument("other.md", "# 登录\n\n另一份文档\n");
+    await writeDocument("untitled.md", "无标题\n");
+    await writeReview(REVIEW.replace(":3 未写锁定时长。", "login.md:3、other.md:3、untitled.md:1"));
+    const cookie = await signIn(app, "pm");
+    const page = await (await app.request("/items/A1", { headers: { Cookie: cookie } })).text();
+    assert.match(page, /登录（specs\/login\.md）:3/);
+    assert.match(page, /登录（specs\/other\.md）:3/);
+    assert.match(page, /specs\/untitled\.md:1/);
+  });
+});
 
 test("pages require signing in and return to the requested page afterwards", async () => {
   await withSite(async ({ app }) => {
@@ -246,7 +277,6 @@ test("an item page shows the referenced source lines with their context", async 
     const pm = await signIn(app, "pm");
     const page = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
     const excerpt = /<section[^>]*id="sources"[\s\S]*?<\/section>/.exec(page)?.[0] ?? "";
-    assert.match(excerpt, /specs\/login\.md/);
     const lines = [
       ...excerpt.matchAll(/<div class="excerpt__line( is-hit)?"[^>]*>([\s\S]*?)<\/div>/g),
     ].map(([, hit, row = ""]) => `${hit ? "*" : " "}${row.replace(/<[^>]+>/g, "").trim()}`);

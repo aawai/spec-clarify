@@ -217,44 +217,65 @@ function text(form: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-/** Referenced source lines, one column per document so conflicting passages sit side by side. */
-function excerptsView(excerpts: Excerpt[]): Html {
-  return html`<section class="card card--default card--padded" id="sources">
-    <h2 class="section-title">原文对照</h2>
-    <div class="excerpts">
-      ${excerpts.map(
-        (excerpt) =>
-          html`<div class="excerpt">
-            <a class="excerpt__file mono" href="${docHref(excerpt.path)}">${excerpt.path}</a>
-            ${excerpt.windows.map((window, index) => {
-              const omittedFrom = (excerpt.windows[index - 1]?.end ?? 0) + 1;
-              return html`${
-                  index
-                    ? html`<a
-                        class="excerpt__gap"
-                        href="${docHref(excerpt.path, omittedFrom, window.start - 1)}"
-                        >省略第 ${omittedFrom}–${window.start - 1} 行，在文档中查看</a
-                      >`
-                    : ""
-                }
-                <div class="excerpt__lines">
-                  ${window.lines.map(
-                    (line) =>
-                      html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
-                        <span class="excerpt__number">${line.number}</span
-                        ><span class="excerpt__text">${line.text}</span>
-                      </div>`,
-                  )}
-                </div>`;
-            })}
-          </div>`,
-      )}
-    </div>
-  </section>`;
-}
-
 export function createApp(options: AppOptions) {
   const { config, entries, users } = options;
+  function documentLabel(workspace: Workspace, name: string): string {
+    const doc = workspace.resolve(name);
+    if (!doc) return name;
+    const filename = doc.path.split("/").at(-1);
+    const configured = config.reviews.some((review) => review.path === doc.path && review.title);
+    if (!configured && doc.title === filename && !/^# (.+)$/m.test(doc.source)) return doc.path;
+    return workspace.documents.filter((other) => other.title === doc.title).length > 1
+      ? `${doc.title}（${doc.path}）`
+      : doc.title;
+  }
+
+  function groupLabel(workspace: Workspace, text: string, group: ReviewGroup): string {
+    const name = group.defaultDocument;
+    if (!name) return text;
+    return text
+      .split(" · ")
+      .map((part) => (part === name ? documentLabel(workspace, name) : part))
+      .join(" · ");
+  }
+
+  /** Referenced source lines, one column per document so conflicting passages sit side by side. */
+  function excerptsView(excerpts: Excerpt[], workspace: Workspace): Html {
+    return html`<section class="card card--default card--padded" id="sources">
+      <h2 class="section-title">原文对照</h2>
+      <div class="excerpts">
+        ${excerpts.map(
+          (excerpt) =>
+            html`<div class="excerpt">
+              <a class="excerpt__file" href="${docHref(excerpt.path)}"
+                >${documentLabel(workspace, excerpt.path)}</a
+              >
+              ${excerpt.windows.map((window, index) => {
+                const omittedFrom = (excerpt.windows[index - 1]?.end ?? 0) + 1;
+                return html`${
+                    index
+                      ? html`<a
+                          class="excerpt__gap"
+                          href="${docHref(excerpt.path, omittedFrom, window.start - 1)}"
+                          >省略第 ${omittedFrom}–${window.start - 1} 行，在文档中查看</a
+                        >`
+                      : ""
+                  }
+                  <div class="excerpt__lines">
+                    ${window.lines.map(
+                      (line) =>
+                        html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
+                          <span class="excerpt__number">${line.number}</span
+                          ><span class="excerpt__text">${line.text}</span>
+                        </div>`,
+                    )}
+                  </div>`;
+              })}
+            </div>`,
+        )}
+      </div>
+    </section>`;
+  }
   const reviewMd = createReviewRenderer();
   const documentMd = createDocumentRenderer({ trustHtml: config.trustDocumentHtml });
   const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
@@ -513,12 +534,16 @@ export function createApp(options: AppOptions) {
   const plain = (value: string) => inline(value, { resolve: () => undefined });
   const refEnv = (workspace: Workspace, item: ReviewItem): RefEnv => ({
     defaultDocument: item.defaultDocument ?? item.group.defaultDocument,
-    resolve: workspace.resolve,
+    resolve: (name) => {
+      const doc = workspace.resolve(name);
+      return doc ? { ...doc, title: documentLabel(workspace, name) } : undefined;
+    },
   });
   const severity = (value: string) => severityChip(value, config.severities);
 
   app.get("/", async (c) => {
-    const { review, reviews } = await loadWorkspace(config);
+    const workspace = await loadWorkspace(config);
+    const { review, reviews } = workspace;
     const activity = await entries.activity();
     const filter = parseFilter(c);
     const states = new Map(
@@ -622,7 +647,7 @@ export function createApp(options: AppOptions) {
                       <a class="item-link" href="/items/${encodeURIComponent(item.id)}${itemSearch}"
                         >${plain(item.title)}</a
                       >
-                      ${filter.group ? "" : html`<span class="item-group">${item.group.title}</span>`}
+                      ${filter.group ? "" : html`<span class="item-group">${groupLabel(workspace, item.group.title, item.group)}</span>`}
                     </td>
                     <td class="table__cell col-chip">
                       ${item.severity ? severity(item.severity) : ""}
@@ -662,7 +687,9 @@ export function createApp(options: AppOptions) {
                 条目来自
                 ${reviews.map(
                   (doc, index) =>
-                    html`${index ? "、" : ""}<a href="${docHref(doc.path)}">${doc.path}</a>`,
+                    html`${index ? "、" : ""}<a href="${docHref(doc.path)}"
+                        >${documentLabel(workspace, doc.path)}</a
+                      >`,
                 )}。点击条目查看原文位置、提交澄清或参与讨论。
               </p>
             </div>
@@ -680,7 +707,9 @@ export function createApp(options: AppOptions) {
               ${groupLink(undefined)}
               ${groupSections(review.groups).map(
                 (section) =>
-                  html`<div class="group-nav__section">${section.title}</div>
+                  html`<div class="group-nav__section">
+                      ${section.groups[0] ? groupLabel(workspace, section.title, section.groups[0]) : section.title}
+                    </div>
                     ${section.groups.map(groupLink)}`,
               )}
             </nav>
@@ -870,7 +899,7 @@ ${valueFor("clarification")}</textarea>
           <span class="breadcrumbs__separator" aria-hidden="true">/</span>
           <span class="breadcrumbs__item"
             ><a class="breadcrumbs__link" href="/${filterSearch(filter, { group: item.group.key })}"
-              >${item.group.title}</a
+              >${groupLabel(workspace, item.group.title, item.group)}</a
             ></span
           >
         </nav>
@@ -890,7 +919,7 @@ ${valueFor("clarification")}</textarea>
           <span class="muted">${item.group.label}</span>
           <span class="muted">·</span>
           <a href="${docHref(item.group.source, item.line, item.endLine)}"
-            >${item.group.source} 第 ${item.line} 行</a
+            >${documentLabel(workspace, item.group.source)} 第 ${item.line} 行</a
           >
         </div>
         <h1>${plain(item.title)}</h1>
@@ -932,7 +961,7 @@ ${valueFor("clarification")}</textarea>
             ${item.related.length ? html`<div class="links-row"><span class="muted">相关条目</span>${idLinks(item.related)}</div>` : ""}
             ${backlinks.length ? html`<div class="links-row"><span class="muted">被以下条目引用</span>${idLinks(backlinks)}</div>` : ""}
           </section>
-          ${excerpts.length ? excerptsView(excerpts) : ""}
+          ${excerpts.length ? excerptsView(excerpts, workspace) : ""}
           <details class="card card--default card--padded">
             <summary class="section-title">处理记录（${history.length}）</summary>
             ${
@@ -1071,7 +1100,8 @@ ${valueFor("comment")}</textarea>
   });
 
   app.get("/docs/view", async (c) => {
-    const { documents } = await loadWorkspace(config);
+    const workspace = await loadWorkspace(config);
+    const { documents } = workspace;
     const doc = documents.find((candidate) => candidate.path === c.req.query("path"));
     if (!doc)
       return message(c, 404, "未找到文档", "没有这份文档。", {
@@ -1097,7 +1127,7 @@ ${valueFor("comment")}</textarea>
                   class="group-nav__link"
                   href="${docHref(other.path)}"
                   ${other.path === doc.path ? html`aria-current="true"` : ""}
-                  ><span>${other.title}</span></a
+                  ><span>${documentLabel(workspace, other.path)}</span></a
                 >`,
             )}
           </nav>
@@ -1107,7 +1137,7 @@ ${valueFor("comment")}</textarea>
                 ><a class="breadcrumbs__link" href="/docs">文档</a></span
               >
               <span class="breadcrumbs__separator" aria-hidden="true">/</span>
-              <span class="breadcrumbs__item mono muted">${doc.path}</span>
+              <span class="breadcrumbs__item muted">${documentLabel(workspace, doc.path)}</span>
             </nav>
             ${
               highlight

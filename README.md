@@ -6,6 +6,7 @@ A self-hosted site that turns a Markdown review of your specs into items for pro
 
 - 条目内容以仓库里的审核文档为准，站点只保存澄清与讨论；文档改动后刷新即可，无需重启。
 - 审核意见中的 `文件:行号` 可点击，跳到源文档对应行并高亮；条目页同时在“原文对照”中按文档并排列出被引用的行及上下各 3 行，冲突的两处原文不用分别打开即可对照。
+- 文档链接优先显示一级标题；审核文档配置了 `title` 时使用配置标题。无标题时显示路径，标题重复时附加路径以便区分；链接仍按路径和行号定位。
 - 条目在澄清后被修改，自动标为“需复核”；工程方追问后、产品方回复前，标为“待回复”。
 - 账号登录，角色分为产品、工程、管理员；只有产品和管理员能提交澄清。
 - 页面不运行任何脚本，CSP 严格；样式来自本地提供的 [HeroUI](https://heroui.com) 预编译 CSS。
@@ -18,7 +19,7 @@ A self-hosted site that turns a Markdown review of your specs into items for pro
 npm install --save-dev github:aawai/spec-clarify
 ```
 
-npm 12 默认禁止 git 依赖，需要先在项目的 `.npmrc` 中加入 `allow-git=root`。安装时 npm 会构建 `dist/`。建议在 `package.json` 中把依赖固定到发布 tag 或某个提交，例如 `github:aawai/spec-clarify#v0.1.4`。
+npm 12 默认禁止 git 依赖，需要先在项目的 `.npmrc` 中加入 `allow-git=root`。安装时 npm 会构建 `dist/`。建议在 `package.json` 中把依赖固定到发布 tag 或某个提交，例如 `github:aawai/spec-clarify#v0.1.5`。
 
 在项目根目录写 `spec-clarify.config.json`，按[审核文档格式](#审核文档格式)写好审核文档，然后：
 

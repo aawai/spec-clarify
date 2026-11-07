@@ -1,6 +1,6 @@
 {
   "name": "spec-clarify",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "把审核意见逐条交给产品方澄清并保留完整记录的自托管站点",
   "license": "Apache-2.0",
   "repository": {
