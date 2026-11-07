@@ -68,7 +68,7 @@
 ## 开发命令
 
 - 环境：Node.js `>=24`，使用 npm；`npm install` 会通过 `prepare` 执行一次构建。
-- `npm run dev`：用 `examples/basic` 启动站点（`127.0.0.1:3100`）；首次需先用 `npx tsx src/cli.ts user add … -c examples/basic/spec-clarify.config.json` 建账号。
+- `npm run dev`：用 `examples/basic` 启动站点（监听 `0.0.0.0:3100`）；首次需先用 `npx tsx src/cli.ts user add … -c examples/basic/spec-clarify.config.json` 建账号。
 - `npm run build`：tsdown 构建 `dist/cli.mjs`、`dist/index.mjs`、`dist/index.d.mts`。
 - `npm run typecheck`：`tsc --noEmit`；`npm run lint`：Oxlint；`npm run format`、`npm run format:check`：Oxfmt（覆盖整个仓库，包括 Markdown 与 JSON）。
 - `npm test`：Node.js 测试运行器通过 tsx 执行 `src/**/*.test.ts`。

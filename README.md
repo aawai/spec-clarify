@@ -150,15 +150,16 @@ npx spec-clarify export -o docs/clarifications.md
 ## 部署
 
 ```sh
-TZ=Asia/Shanghai SPEC_CLARIFY_HOST=0.0.0.0 npx spec-clarify serve --config /srv/project/spec-clarify.config.json
+TZ=Asia/Shanghai npx spec-clarify serve --config /srv/project/spec-clarify.config.json
 ```
 
-| 选项               | 环境变量                        | 默认值      |
-| ------------------ | ------------------------------- | ----------- |
-| `--host`           | `SPEC_CLARIFY_HOST`             | `127.0.0.1` |
-| `--port`           | `SPEC_CLARIFY_PORT`             | `3100`      |
-| `--secure-cookies` | `SPEC_CLARIFY_SECURE_COOKIES=1` | 关闭        |
+| 选项               | 环境变量                        | 默认值    |
+| ------------------ | ------------------------------- | --------- |
+| `--host`           | `SPEC_CLARIFY_HOST`             | `0.0.0.0` |
+| `--port`           | `SPEC_CLARIFY_PORT`             | `3100`    |
+| `--secure-cookies` | `SPEC_CLARIFY_SECURE_COOKIES=1` | 关闭      |
 
+- 默认监听所有网卡；只允许本机访问（例如由同机反向代理转发）时使用 `--host 127.0.0.1`。
 - 经公网或不可信网络访问时，放在提供 HTTPS 的反向代理之后，并开启 `--secure-cookies`。
 - 数据库使用 WAL 模式。备份用 SQLite 在线备份（`sqlite3 data/spec-clarify.db ".backup backup.db"`），不要只复制主文件；也可以定期导出记录纳入版本控制。
 - 每次请求都重新读取源文档与审核文档，`git pull` 后刷新页面即可。
