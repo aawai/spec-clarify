@@ -114,6 +114,21 @@ test("pages require signing in and return to the requested page afterwards", asy
   });
 });
 
+test("a form posted from another origin is refused with 403", async () => {
+  await withSite(async ({ app }) => {
+    const response = await app.request("/login", {
+      method: "POST",
+      headers: {
+        Origin: "http://evil.example",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ username: "pm", password: "password-1", next: "/" }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("Set-Cookie"), null);
+  });
+});
+
 test("clarifying while browsing 未澄清 keeps the filter and pages on to the next open item", async () => {
   await withSite(async ({ app }) => {
     const pm = await signIn(app, "pm");

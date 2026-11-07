@@ -105,7 +105,7 @@ export function layout(options: LayoutOptions, body: Html): Html {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="referrer" content="no-referrer" />
+        <meta name="referrer" content="same-origin" />
         <title>${pageTitle} · ${siteTitle}</title>
         ${STYLESHEETS.map((sheet) => html`<link rel="stylesheet" href="${sheet.href}" />`)}
       </head>
