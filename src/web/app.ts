@@ -203,35 +203,27 @@ function excerptsView(excerpts: Excerpt[]): Html {
         (excerpt) =>
           html`<div class="excerpt">
             <a class="excerpt__file mono" href="${docHref(excerpt.path)}">${excerpt.path}</a>
-            ${excerpt.windows.map(
-              (window, index) =>
-                html`${
-                    index
-                      ? html`<p class="excerpt__gap">
-                          省略第 ${(excerpt.windows[index - 1]?.end ?? 0) + 1}–${window.start - 1}
-                          行
-                        </p>`
-                      : ""
-                  }
-                  <div class="excerpt__lines">
-                    ${window.lines.map(
-                      (line) =>
-                        html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
-                          <span class="excerpt__number">${line.number}</span
-                          ><span class="excerpt__text">${line.text}</span>
-                        </div>`,
-                    )}
-                  </div>
-                  ${
-                    window.hiddenLines
-                      ? html`<a
-                          class="excerpt__more"
-                          href="${docHref(excerpt.path, window.start, window.end)}"
-                          >其余 ${window.hiddenLines} 行在文档中查看</a
-                        >`
-                      : ""
-                  }`,
-            )}
+            ${excerpt.windows.map((window, index) => {
+              const omittedFrom = (excerpt.windows[index - 1]?.end ?? 0) + 1;
+              return html`${
+                  index
+                    ? html`<a
+                        class="excerpt__gap"
+                        href="${docHref(excerpt.path, omittedFrom, window.start - 1)}"
+                        >省略第 ${omittedFrom}–${window.start - 1} 行，在文档中查看</a
+                      >`
+                    : ""
+                }
+                <div class="excerpt__lines">
+                  ${window.lines.map(
+                    (line) =>
+                      html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
+                        <span class="excerpt__number">${line.number}</span
+                        ><span class="excerpt__text">${line.text}</span>
+                      </div>`,
+                  )}
+                </div>`;
+            })}
           </div>`,
       )}
     </div>

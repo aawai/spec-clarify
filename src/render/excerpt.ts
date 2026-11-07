@@ -16,9 +16,7 @@ export interface ExcerptLine {
 export interface ExcerptWindow {
   start: number;
   end: number;
-  /** At most `MAX_WINDOW_LINES` lines from `start`; the rest is counted in `hiddenLines`. */
   lines: ExcerptLine[];
-  hiddenLines: number;
 }
 
 export interface Excerpt {
@@ -28,7 +26,11 @@ export interface Excerpt {
 
 /** Lines of context shown above and below each referenced range. */
 const CONTEXT_LINES = 3;
-/** Keeps a reference to a whole section from turning the item page into the document. */
+/**
+ * Keeps a reference to a whole section from turning the item page into the document: a longer
+ * window shows only its first and last `MAX_WINDOW_LINES / 2` lines, so both ends of the
+ * referenced range stay visible and the middle is left to the document view.
+ */
 const MAX_WINDOW_LINES = 40;
 
 /**
@@ -57,21 +59,23 @@ export function buildExcerpts(
       if (last && start <= last.end + 1) last.end = Math.max(last.end, end);
       else spans.push({ start, end });
     }
+    const window = (start: number, end: number): ExcerptWindow => ({
+      start,
+      end,
+      lines: lines.slice(start - 1, end).map((line, index) => ({
+        number: start + index,
+        text: line,
+        hit: hits.has(start + index),
+      })),
+    });
+    const half = MAX_WINDOW_LINES / 2;
     excerpts.push({
       path,
-      windows: spans.map(({ start, end }) => {
-        const shownEnd = Math.min(end, start + MAX_WINDOW_LINES - 1);
-        return {
-          start,
-          end,
-          lines: lines.slice(start - 1, shownEnd).map((line, index) => ({
-            number: start + index,
-            text: line,
-            hit: hits.has(start + index),
-          })),
-          hiddenLines: end - shownEnd,
-        };
-      }),
+      windows: spans.flatMap(({ start, end }) =>
+        end - start + 1 > MAX_WINDOW_LINES
+          ? [window(start, start + half - 1), window(end - half + 1, end)]
+          : [window(start, end)],
+      ),
     });
   }
   return excerpts;
