@@ -31,7 +31,7 @@ import {
 } from "../render/markdown.js";
 import { buildExcerpts, type DocRef, type Excerpt } from "../render/excerpt.js";
 import type { ReviewGroup, ReviewItem } from "../review/model.js";
-import { ENTRY_LABELS, type Entry, type EntryStore } from "../store/entries.js";
+import { ENTRY_LABELS, type Entry, type EntryStore, type ItemActivity } from "../store/entries.js";
 import { canClarify, ROLE_LABELS, type User, type UserStore } from "../store/users.js";
 import { STYLESHEETS } from "./style.js";
 import {
@@ -95,6 +95,8 @@ const EntryForm = z.object({
   body: Body,
   digest: z.string().min(1),
   base: z.optional(z.coerce.number().int().min(0)),
+  /** `next`: after a clarification, continue with the next item in the current filter. */
+  after: z.literal("next").optional(),
 });
 const LoginForm = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
 const PasswordForm = z
@@ -152,6 +154,23 @@ function matchesFilter(item: ReviewItem, state: ItemState, filter: ListFilter): 
     severityMatches &&
     (!filter.q || matchesQuery(item, filter.q))
   );
+}
+
+/**
+ * The item after `index` in review order that matches `filter`. Found by review position because
+ * the current item may itself have just left the filter (e.g. clarified while viewing 未澄清).
+ */
+function nextInFilter(
+  items: ReviewItem[],
+  index: number,
+  filter: ListFilter,
+  activity: Map<string, ItemActivity>,
+): ReviewItem | undefined {
+  return items
+    .slice(index + 1)
+    .find((candidate) =>
+      matchesFilter(candidate, itemState(candidate, activity.get(candidate.id)), filter),
+    );
 }
 
 /** Groups in review order, gathered under their navigation section. */
@@ -694,7 +713,7 @@ export function createApp(options: AppOptions) {
       matchesFilter(candidate, itemState(candidate, activity.get(candidate.id)), filter);
     const matching = items.filter(inFilter);
     const previous = items.slice(0, index).filter(inFilter).at(-1);
-    const next = items.slice(index + 1).find(inFilter);
+    const next = nextInFilter(items, index, filter, activity);
     const position = matching.indexOf(item);
 
     const itemHref = (target: string) => `/items/${encodeURIComponent(target)}${search}`;
@@ -764,7 +783,22 @@ ${valueFor("clarification")}</textarea>
               >以 ${user.displayName} 的名义提交。记录只追加，更正请再提交一次。</span
             >
           </label>
-          <button class="button button--primary button--full-width" type="submit">
+          ${
+            next
+              ? html`<button
+                  class="button button--primary button--full-width"
+                  type="submit"
+                  name="after"
+                  value="next"
+                >
+                  ${clarification ? "更新并下一条" : "提交并下一条"}
+                </button>`
+              : ""
+          }
+          <button
+            class="button ${next ? "button--secondary" : "button--primary"} button--full-width"
+            type="submit"
+          >
             ${clarification ? "更新澄清" : "提交澄清"}
           </button>
         </form>`
@@ -899,9 +933,9 @@ ${valueFor("comment")}</textarea>
     const form = parsed.data;
     if (kind === "clarification" && form.base === undefined) return fail("缺少基准澄清编号", 422);
 
-    const item = (await loadWorkspace(config)).review.items.find(
-      (candidate) => candidate.id === id,
-    );
+    const { items } = (await loadWorkspace(config)).review;
+    const index = items.findIndex((candidate) => candidate.id === id);
+    const item = items[index];
     if (!item) return renderItem(c, id);
     if (kind === "clarification" && form.digest !== item.digest) {
       return fail("审核文档中的本条目已更新，请阅读最新内容后再提交澄清。你的内容已保留。", 409);
@@ -922,8 +956,14 @@ ${valueFor("comment")}</textarea>
         409,
       );
     }
+    const filter = parseFilter(c);
+    if (kind === "clarification" && form.after === "next") {
+      const next = nextInFilter(items, index, filter, await entries.activity());
+      if (next)
+        return c.redirect(`/items/${encodeURIComponent(next.id)}${filterSearch(filter)}`, 303);
+    }
     return c.redirect(
-      `/items/${encodeURIComponent(item.id)}${filterSearch(parseFilter(c))}#entry-${result.entry.id}`,
+      `/items/${encodeURIComponent(item.id)}${filterSearch(filter)}#entry-${result.entry.id}`,
       303,
     );
   };

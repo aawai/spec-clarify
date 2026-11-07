@@ -255,3 +255,28 @@ test("an item page shows the referenced source lines with their context", async 
     assert.doesNotMatch(plain, /id="sources"/);
   });
 });
+
+test("提交并下一条 records the clarification and moves on to the next item in the filter", async () => {
+  await withSite(async ({ app, entries }) => {
+    const pm = await signIn(app, "pm");
+    const { digest } = await formValues(app, pm, "A1");
+    const submitted = await post(app, pm, "/items/A1/clarifications?status=open", {
+      body: "锁定 30 分钟",
+      digest,
+      base: "0",
+      after: "next",
+    });
+    assert.equal(submitted.status, 303);
+    assert.equal(submitted.headers.get("Location"), "/items/A2?status=open");
+    assert.equal((await entries.entriesFor("A1")).length, 1);
+
+    const last = await formValues(app, pm, "A3");
+    const atEnd = await post(app, pm, "/items/A3/clarifications?status=open", {
+      body: "需要",
+      digest: last.digest,
+      base: "0",
+      after: "next",
+    });
+    assert.match(atEnd.headers.get("Location") ?? "", /^\/items\/A3\?status=open#entry-\d+$/);
+  });
+});
