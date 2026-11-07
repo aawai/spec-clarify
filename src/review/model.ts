@@ -1,0 +1,113 @@
+import { createHash } from "node:crypto";
+
+export interface ReviewGroup {
+  /** Stable key used in URLs and filters. */
+  key: string;
+  /** Full title, used in breadcrumbs, item lists and the export. */
+  title: string;
+  /** Short label shown in the navigation under `section`. */
+  label: string;
+  /** Navigation heading the group is listed under. */
+  section: string;
+  /** Document that bare `:行号` references in this group resolve to. */
+  defaultDocument?: string;
+}
+
+export interface ReviewField {
+  label: string;
+  /** Inline Markdown. */
+  value: string;
+}
+
+export interface ReviewItem {
+  /** Author-assigned and stable; clarification records are keyed by it. */
+  id: string;
+  group: ReviewGroup;
+  title: string;
+  severity?: string;
+  fields: ReviewField[];
+  /** Block Markdown. */
+  body?: string;
+  /** IDs of other items this item names; only IDs that exist in the review are kept. */
+  related: string[];
+  /** Overrides the group's default document for bare line references. */
+  defaultDocument?: string;
+  /** 1-based line range of the item in the review document. */
+  line: number;
+  endLine: number;
+  /** Changes whenever the item's content changes; whitespace and table alignment do not count. */
+  digest: string;
+}
+
+export interface Review {
+  groups: ReviewGroup[];
+  items: ReviewItem[];
+}
+
+/** What an adapter extracts; IDs of related items and digests are resolved by `buildReview`. */
+export interface ItemDraft extends Omit<ReviewItem, "related" | "digest"> {
+  /** Free text that may name other items, e.g. a "related" column. */
+  relatedText: string[];
+}
+
+function normalize(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function digestOf(draft: ItemDraft): string {
+  const content = JSON.stringify([
+    normalize(draft.title),
+    normalize(draft.severity ?? ""),
+    draft.fields.map((field) => [normalize(field.label), normalize(field.value)]),
+    normalize(draft.body ?? ""),
+    // Bare `:行号` references in the item point into this document.
+    draft.defaultDocument ?? "",
+  ]);
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+/** Validates item IDs and derives `related` and `digest` the same way for every adapter. */
+export function buildReview(groups: ReviewGroup[], drafts: ItemDraft[]): Review {
+  const known = new Set<string>();
+  for (const draft of drafts) {
+    if (known.has(draft.id)) {
+      throw new Error(`Duplicate item ID ${draft.id} at line ${draft.line}`);
+    }
+    known.add(draft.id);
+  }
+  const items = drafts.map(({ relatedText, ...draft }): ReviewItem => {
+    const related = new Set<string>();
+    for (const token of relatedText.join(" ").split(/[^\p{L}\p{N}_-]+/u)) {
+      if (token !== draft.id && known.has(token)) related.add(token);
+    }
+    return { ...draft, related: [...related], digest: digestOf({ ...draft, relatedText }) };
+  });
+  return { groups, items };
+}
+
+/** Splits a Markdown table row, keeping escaped pipes (`\|`) inside their cell. */
+export function splitTableRow(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  const body = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i];
+    if (char === "\\" && body[i + 1] === "|") {
+      current += "\\|";
+      i++;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+export function isDelimiterRow(cells: string[]): boolean {
+  return cells.every((cell) => /^:?-+:?$/.test(cell));
+}

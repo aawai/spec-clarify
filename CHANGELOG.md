@@ -1,0 +1,12 @@
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+- 站点：按分组、状态（未澄清 / 已澄清 / 需复核 / 待回复）、严重度和关键词筛选条目；条目详情含原文行号跳转、相关条目与反向引用、澄清与评论记录。
+- 审核文档格式：默认 `markdown` 格式与兼容中文 PRD 审核报告的 `prd-review` 适配器。
+- 账号与角色：产品、管理员可提交澄清，工程可评论追问；命令行管理账号，站内修改密码。
+- 记录只追加，带并发保护与条目变更检测；审核文档无法解析时暂停查看与提交。
+- `spec-clarify` 命令行：`serve`、`check`、`export`、`user`。
+- Agent Skill `skills/spec-clarify-review`：审核文档的编写约定。
