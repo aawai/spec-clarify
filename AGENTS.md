@@ -24,7 +24,7 @@
 
 - spec-clarify 是自托管的审核意见澄清站点：把一个项目的一份或多份 Markdown 审核文档拆成条目，产品方逐条澄清，工程方评论追问，记录只追加、可导出为 Markdown。界面为中文。
 - 运行形态：单个 Node.js 进程加一个 SQLite 文件，一个配置文件 / 数据库对应一个项目；页面服务端渲染，不运行客户端脚本。
-- 分发方式：Apache-2.0 公开仓库，使用方以 git 依赖安装并固定到发布 tag 或具体提交（安装时由 `prepare` 构建 `dist/`）；未发布到 npm，版本以 GitHub Release（tag `v<package.json 版本>`）发布，当前为 `v0.1.3`。
+- 分发方式：Apache-2.0 公开仓库，使用方以 git 依赖安装并固定到发布 tag 或具体提交（安装时由 `prepare` 构建 `dist/`）；未发布到 npm，版本以 GitHub Release（tag `v<package.json 版本>`）发布，当前为 `v0.1.4`。
 - 技术栈：TypeScript、Hono（`@hono/node-server`）、Zod、markdown-it、`@libsql/client`（SQLite）、`@heroui/styles` 预编译 CSS；Oxc 工具链使用 Oxlint、Oxfmt 和基于 Rolldown 的 tsdown，类型检查用 TypeScript `tsc`。
 
 ## 契约来源

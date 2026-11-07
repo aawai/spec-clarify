@@ -75,9 +75,14 @@ const NO_SEVERITY = "none";
 const MAX_LOGIN_FAILURES = 5;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 
-type ListStatus = ItemStatus | "awaiting";
-const LIST_STATUS_LABELS: Record<ListStatus, string> = { ...STATUS_LABELS, awaiting: "待回复" };
-const LIST_STATUSES: ListStatus[] = [...STATUSES, "awaiting"];
+type ListStatus = ItemStatus | "awaiting" | "pending" | "all";
+const LIST_STATUS_LABELS: Record<ListStatus, string> = {
+  ...STATUS_LABELS,
+  awaiting: "待回复",
+  pending: "待处理",
+  all: "全部",
+};
+const LIST_STATUSES: ListStatus[] = ["pending", "all", ...STATUSES, "awaiting"];
 
 /** List filters; detail pages carry them along so paging and "back to list" stay in the same view. */
 const ListQuery = z.object({
@@ -113,9 +118,13 @@ interface FormState {
   body: string;
 }
 
-function parseFilter(c: Context): ListFilter {
+function parseFilter(c: Context<Env>): ListFilter {
   const parsed = ListQuery.safeParse(c.req.query());
-  return parsed.success ? parsed.data : {};
+  const filter = parsed.success ? parsed.data : {};
+  return {
+    ...filter,
+    status: filter.status ?? (canClarify(session(c).user.role) ? "pending" : "all"),
+  };
 }
 
 /** Query string for `filter` with `overrides` applied; `undefined` overrides drop a key. */
@@ -144,7 +153,12 @@ function matchesQuery(item: ReviewItem, q: string): boolean {
 function matchesFilter(item: ReviewItem, state: ItemState, filter: ListFilter): boolean {
   const statusMatches =
     !filter.status ||
-    (filter.status === "awaiting" ? state.awaitingReply : state.status === filter.status);
+    filter.status === "all" ||
+    (filter.status === "pending"
+      ? state.status === "open" || state.status === "stale" || state.awaitingReply
+      : filter.status === "awaiting"
+        ? state.awaitingReply
+        : state.status === filter.status);
   const severityMatches =
     !filter.severity ||
     (filter.severity === NO_SEVERITY ? !item.severity : item.severity === filter.severity);
@@ -154,6 +168,15 @@ function matchesFilter(item: ReviewItem, state: ItemState, filter: ListFilter): 
     severityMatches &&
     (!filter.q || matchesQuery(item, filter.q))
   );
+}
+
+/** Stable severity ordering is shared by the list, pager and submit-and-next. */
+function orderedItems(items: ReviewItem[], severities: string[]): ReviewItem[] {
+  const rank = (item: ReviewItem) => {
+    const index = item.severity ? severities.indexOf(item.severity) : -1;
+    return index < 0 ? severities.length : index;
+  };
+  return [...items].sort((a, b) => rank(a) - rank(b));
 }
 
 /**
@@ -235,6 +258,10 @@ export function createApp(options: AppOptions) {
   const reviewMd = createReviewRenderer();
   const documentMd = createDocumentRenderer({ trustHtml: config.trustDocumentHtml });
   const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
+  const receipts = new Map<
+    string,
+    { token: string; target: string; previous: string; entryId: number; expires: number }
+  >();
   // Unknown usernames are checked against this hash so they take as long as wrong passwords.
   const dummyHash = hashPassword(generatePassword());
   const app = new Hono<Env>();
@@ -393,6 +420,7 @@ export function createApp(options: AppOptions) {
   app.post("/logout", async (c) => {
     await users.deleteSession(session(c).hash);
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    receipts.delete(session(c).hash);
     return c.redirect("/login", 303);
   });
 
@@ -499,7 +527,9 @@ export function createApp(options: AppOptions) {
     const state = (item: ReviewItem) =>
       states.get(item.id) ?? { status: "open", awaitingReply: false };
 
-    const items = review.items.filter((item) => matchesFilter(item, state(item), filter));
+    const ordered =
+      filter.status === "pending" ? orderedItems(review.items, config.severities) : review.items;
+    const items = ordered.filter((item) => matchesFilter(item, state(item), filter));
     // Status tab counts honour every filter except the status itself.
     const statusScope = review.items.filter((item) =>
       matchesFilter(item, state(item), { ...filter, status: undefined }),
@@ -517,8 +547,14 @@ export function createApp(options: AppOptions) {
         ${current ? html`aria-current="true"` : ""}
       >
         <span>${group ? group.label : "全部条目"}</span>
-        <span class="group-nav__count">${done}/${groupItems.length}</span>
-        ${progressBar(done, groupItems.length)}
+        ${
+          filter.status === "pending"
+            ? html`<span class="group-nav__count"
+                >${groupItems.filter((item) => matchesFilter(item, state(item), { status: "pending" })).length}</span
+              >`
+            : html`<span class="group-nav__count">${done}/${groupItems.length}</span>
+                ${progressBar(done, groupItems.length)}`
+        }
       </a>`;
     };
 
@@ -557,6 +593,7 @@ export function createApp(options: AppOptions) {
       : "";
 
     const itemSearch = filterSearch(filter);
+    const hasActivity = items.some((item) => activity.has(item.id));
     const table = items.length
       ? html`<div class="table-root table-root--secondary items">
           <div class="table__scroll-container">
@@ -567,8 +604,12 @@ export function createApp(options: AppOptions) {
                   <th class="table__column">条目</th>
                   <th class="table__column col-chip">严重度</th>
                   <th class="table__column col-status">状态</th>
-                  <th class="table__column col-num">记录</th>
-                  <th class="table__column col-time">最近更新</th>
+                  ${
+                    hasActivity
+                      ? html`<th class="table__column col-num">记录</th>
+                          <th class="table__column col-time">最近更新</th>`
+                      : ""
+                  }
                 </tr>
               </thead>
               <tbody class="table__body">
@@ -591,10 +632,16 @@ export function createApp(options: AppOptions) {
                         ${statusChip(status)} ${awaitingReply ? awaitingChip() : ""}
                       </div>
                     </td>
-                    <td class="table__cell col-num">${itemActivity?.entryCount || ""}</td>
-                    <td class="table__cell col-time muted">
-                      ${itemActivity ? formatTime(itemActivity.lastActivity) : ""}
-                    </td>
+                    ${
+                      hasActivity
+                        ? html`<td class="table__cell col-num">
+                              ${itemActivity?.entryCount || ""}
+                            </td>
+                            <td class="table__cell col-time muted">
+                              ${itemActivity ? formatTime(itemActivity.lastActivity) : ""}
+                            </td>`
+                        : ""
+                    }
                   </tr>`;
                 })}
               </tbody>
@@ -620,11 +667,16 @@ export function createApp(options: AppOptions) {
               </p>
             </div>
             <div class="overall">
+              ${filter.status === "pending" && items[0] ? html`<a class="button button--primary button--sm" href="/items/${encodeURIComponent(items[0].id)}${itemSearch}">从第一条开始处理</a>` : ""}
               ${progressBar(clarified(review.items), review.items.length, "已澄清")}
             </div>
           </div>
           <div class="list-layout">
-            <nav class="card card--default group-nav" aria-label="分组">
+            <nav
+              class="card card--default group-nav"
+              aria-label="${filter.status === "pending" ? "分组（待处理数）" : "分组"}"
+            >
+              ${filter.status === "pending" ? html`<div class="group-nav__section">分组 · 待处理数</div>` : ""}
               ${groupLink(undefined)}
               ${groupSections(review.groups).map(
                 (section) =>
@@ -634,7 +686,6 @@ export function createApp(options: AppOptions) {
             </nav>
             <section>
               <nav class="status-tabs" aria-label="状态">
-                ${statusTab(undefined, "全部")}
                 ${LIST_STATUSES.map((value) => statusTab(value, LIST_STATUS_LABELS[value]))}
               </nav>
               <form class="filter-bar" method="get" action="/" role="search">
@@ -668,7 +719,11 @@ export function createApp(options: AppOptions) {
     httpStatus: 200 | 409 | 422 = 200,
   ) => {
     const workspace = await loadWorkspace(config);
-    const { items } = workspace.review;
+    const filter = parseFilter(c);
+    const items =
+      filter.status === "pending"
+        ? orderedItems(workspace.review.items, config.severities)
+        : workspace.review.items;
     const index = items.findIndex((candidate) => candidate.id === id);
     const item = items[index];
     if (!item) {
@@ -678,8 +733,15 @@ export function createApp(options: AppOptions) {
       });
     }
     const { user } = session(c);
-    const filter = parseFilter(c);
     const search = filterSearch(filter);
+    const receipt = receipts.get(session(c).hash);
+    const showReceipt =
+      !form &&
+      receipt &&
+      receipt.target === id &&
+      receipt.expires > Date.now() &&
+      receipt.token === c.req.query("receipt");
+    if (showReceipt) receipts.delete(session(c).hash);
     const [history, activity] = await Promise.all([
       entries.entriesFor(item.id),
       entries.activity(),
@@ -750,52 +812,52 @@ export function createApp(options: AppOptions) {
     const action = (kind: string) => `/items/${encodeURIComponent(item.id)}/${kind}${search}`;
 
     const clarifyForm = canClarify(user.role)
-      ? html`<form
-          method="post"
-          action="${action("clarifications")}"
-          class="card card--default card--padded form"
-          id="clarify"
+      ? html`<details
+          class="card card--default card--padded"
+          ${!clarification || form?.kind === "clarification" || status === "stale" ? "open" : ""}
         >
-          <h2 class="section-title">${clarification ? "更新澄清" : "提交澄清"}</h2>
-          ${errorFor("clarification")}
-          <input type="hidden" name="digest" value="${item.digest}" />
-          <input type="hidden" name="base" value="${clarification?.id ?? 0}" />
-          <label class="field">
-            <span class="field__label">澄清内容</span>
-            <textarea
-              class="textarea textarea--full-width"
-              name="body"
-              rows="6"
-              required
-              maxlength="5000"
-              placeholder="写明结论、依据，以及需要回写到哪份文档"
-            >
+          <summary class="section-title">${clarification ? "更新澄清" : "提交澄清"}</summary>
+          <form method="post" action="${action("clarifications")}" class="form" id="clarify">
+            ${errorFor("clarification")}
+            <input type="hidden" name="digest" value="${item.digest}" />
+            <input type="hidden" name="base" value="${clarification?.id ?? 0}" />
+            <label class="field">
+              <span class="field__label">澄清内容</span>
+              <textarea
+                class="textarea textarea--full-width"
+                name="body"
+                rows="6"
+                required
+                maxlength="5000"
+                placeholder="写明结论、依据，以及需要回写到哪份文档"
+              >
 ${valueFor("clarification")}</textarea>
-            <span class="field__hint"
-              >以 ${user.displayName} 的名义提交。记录只追加，更正请再提交一次。</span
+              <span class="field__hint"
+                >以 ${user.displayName} 的名义提交。记录只追加，更正请再提交一次。</span
+              >
+            </label>
+            ${
+              next
+                ? html`<button
+                    class="button button--primary button--full-width"
+                    type="submit"
+                    name="after"
+                    value="next"
+                  >
+                    ${clarification ? "更新并下一条" : "提交并下一条"}
+                  </button>`
+                : ""
+            }
+            <button
+              class="button ${next ? "button--secondary" : "button--primary"} button--full-width"
+              type="submit"
             >
-          </label>
-          ${
-            next
-              ? html`<button
-                  class="button button--primary button--full-width"
-                  type="submit"
-                  name="after"
-                  value="next"
-                >
-                  ${clarification ? "更新并下一条" : "提交并下一条"}
-                </button>`
-              : ""
-          }
-          <button
-            class="button ${next ? "button--secondary" : "button--primary"} button--full-width"
-            type="submit"
-          >
-            ${clarification ? "更新澄清" : "提交澄清"}
-          </button>
-        </form>`
+              ${clarification ? "更新澄清" : "提交澄清"}
+            </button>
+          </form>
+        </details>`
       : html`<section class="card card--default card--padded">
-          <p class="readonly-note">澄清由产品方提交。对条目或澄清有疑问，请在左侧追问。</p>
+          <p class="readonly-note">澄清由产品方提交。对条目或澄清有疑问，请在评论中追问。</p>
         </section>`;
 
     const body = html`<div class="detail-top">
@@ -807,7 +869,7 @@ ${valueFor("clarification")}</textarea>
           >
           <span class="breadcrumbs__separator" aria-hidden="true">/</span>
           <span class="breadcrumbs__item"
-            ><a class="breadcrumbs__link" href="/${filterSearch({ group: item.group.key })}"
+            ><a class="breadcrumbs__link" href="/${filterSearch(filter, { group: item.group.key })}"
               >${item.group.title}</a
             ></span
           >
@@ -834,7 +896,24 @@ ${valueFor("clarification")}</textarea>
         <h1>${plain(item.title)}</h1>
       </header>
       ${status === "stale" ? alert("danger", "本条目在最近一次澄清后已修改", "请核对审核文档的最新内容，确认澄清是否仍然成立并重新提交。") : ""}
+      ${showReceipt ? html`<div class="alert alert--success" role="status">澄清已保存。<a href="/items/${encodeURIComponent(receipt.previous)}${search}#entry-${receipt.entryId}">返回上一条查看记录</a>${receipt.previous === id ? "；当前筛选中没有下一条。" : ""}</div>` : ""}
       <div class="detail-layout">
+        <aside class="detail-side">
+          ${
+            clarification
+              ? html`<section
+                  class="card card--default card--padded conclusion ${status === "stale" ? "is-stale" : ""}"
+                >
+                  <h2 class="section-title">当前澄清 ${statusChip(status)}</h2>
+                  <div class="conclusion__body">${clarification.body}</div>
+                  <div class="conclusion__meta">
+                    ${clarification.author.displayName} · ${formatTime(clarification.createdAt)}
+                  </div>
+                </section>`
+              : ""
+          }
+          ${clarifyForm}
+        </aside>
         <div class="detail-main">
           <section class="card card--default card--padded">
             <h2 class="section-title">审核意见</h2>
@@ -854,8 +933,8 @@ ${valueFor("clarification")}</textarea>
             ${backlinks.length ? html`<div class="links-row"><span class="muted">被以下条目引用</span>${idLinks(backlinks)}</div>` : ""}
           </section>
           ${excerpts.length ? excerptsView(excerpts) : ""}
-          <section class="card card--default card--padded">
-            <h2 class="section-title">处理记录（${history.length}）</h2>
+          <details class="card card--default card--padded">
+            <summary class="section-title">处理记录（${history.length}）</summary>
             ${
               history.length
                 ? html`<ol class="timeline">
@@ -863,8 +942,13 @@ ${valueFor("clarification")}</textarea>
                   </ol>`
                 : html`<p class="muted">暂无记录。</p>`
             }
+          </details>
+          <details
+            class="card card--default card--padded"
+            ${!canClarify(user.role) || form?.kind === "comment" ? "open" : ""}
+          >
+            <summary class="section-title">评论 / 追问</summary>
             <form method="post" action="${action("comments")}" class="form composer" id="comment">
-              <h3 class="section-title">评论 / 追问</h3>
               ${errorFor("comment")}
               <input type="hidden" name="digest" value="${item.digest}" />
               <textarea
@@ -882,24 +966,8 @@ ${valueFor("comment")}</textarea>
                 <button class="button button--secondary" type="submit">发表</button>
               </div>
             </form>
-          </section>
+          </details>
         </div>
-        <aside class="detail-side">
-          ${
-            clarification
-              ? html`<section
-                  class="card card--default card--padded conclusion ${status === "stale" ? "is-stale" : ""}"
-                >
-                  <h2 class="section-title">当前澄清 ${statusChip(status)}</h2>
-                  <div class="conclusion__body">${clarification.body}</div>
-                  <div class="conclusion__meta">
-                    ${clarification.author.displayName} · ${formatTime(clarification.createdAt)}
-                  </div>
-                </section>`
-              : ""
-          }
-          ${clarifyForm}
-        </aside>
       </div>`;
     return c.html(page(c, item.id, "items", body), httpStatus);
   };
@@ -925,7 +993,10 @@ ${valueFor("comment")}</textarea>
     const form = parsed.data;
     if (kind === "clarification" && form.base === undefined) return fail("缺少基准澄清编号", 422);
 
-    const { items } = (await loadWorkspace(config)).review;
+    const filter = parseFilter(c);
+    const reviewItems = (await loadWorkspace(config)).review.items;
+    const items =
+      filter.status === "pending" ? orderedItems(reviewItems, config.severities) : reviewItems;
     const index = items.findIndex((candidate) => candidate.id === id);
     const item = items[index];
     if (!item) return renderItem(c, id);
@@ -948,11 +1019,22 @@ ${valueFor("comment")}</textarea>
         409,
       );
     }
-    const filter = parseFilter(c);
     if (kind === "clarification" && form.after === "next") {
       const next = nextInFilter(items, index, filter, await entries.activity());
-      if (next)
-        return c.redirect(`/items/${encodeURIComponent(next.id)}${filterSearch(filter)}`, 303);
+      const target = next?.id ?? item.id;
+      const token = newSessionToken();
+      const now = Date.now();
+      for (const [key, receipt] of receipts) if (receipt.expires <= now) receipts.delete(key);
+      receipts.set(session(c).hash, {
+        token,
+        target,
+        previous: item.id,
+        entryId: result.entry.id,
+        expires: now + 10 * 60 * 1000,
+      });
+      const params = new URLSearchParams(filterSearch(filter).slice(1));
+      params.set("receipt", token);
+      return c.redirect(`/items/${encodeURIComponent(target)}?${params}`, 303);
     }
     return c.redirect(
       `/items/${encodeURIComponent(item.id)}${filterSearch(filter)}#entry-${result.entry.id}`,

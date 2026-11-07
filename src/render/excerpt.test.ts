@@ -74,3 +74,29 @@ test("a long referenced range keeps both of its ends and leaves out the middle",
 test("references to unknown documents are skipped", () => {
   assert.deepEqual(buildExcerpts([{ path: "gone.md", start: 1, end: 1 }], source), []);
 });
+
+test("compacts context whitespace while preserving referenced blank lines and source numbers", () => {
+  const text = "\n\n# 标题 #\n\n\n正文\n\n";
+  const [excerpt] = buildExcerpts([{ path: "a.md", start: 3, end: 4 }], () => text);
+  assert.deepEqual(excerpt?.windows[0]?.lines, [
+    { number: 3, text: "标题", hit: true },
+    { number: 4, text: "", hit: true },
+    { number: 6, text: "正文", hit: false },
+  ]);
+});
+
+test("keeps Markdown-looking code and its blank lines intact", () => {
+  const text = "```md\n# not a heading\n\n\ncontent\n```";
+  const [excerpt] = buildExcerpts([{ path: "a.md", start: 3, end: 3 }], () => text);
+  assert.deepEqual(
+    excerpt?.windows[0]?.lines.map((line) => [line.number, line.text]),
+    [
+      [1, "```md"],
+      [2, "# not a heading"],
+      [3, ""],
+      [4, ""],
+      [5, "content"],
+      [6, "```"],
+    ],
+  );
+});

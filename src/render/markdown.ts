@@ -95,7 +95,9 @@ function linkRefs(state: StateCore) {
           open.attrSet("href", docHref(target.path, start, end));
           open.attrSet("class", "ref");
           children.push(open);
-          pushText(state, children, text);
+          const display =
+            position === 0 && file ? text : `${position === 0 ? label : ""}${target.path}:${range}`;
+          pushText(state, children, display);
           children.push(new state.Token("link_close", "a", -1));
         });
       }
