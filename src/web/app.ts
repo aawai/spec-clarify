@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { compress } from "hono/compress";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { html, raw } from "hono/html";
@@ -202,6 +203,9 @@ export function createApp(options: AppOptions) {
       status,
     );
 
+  // The item list for a few hundred items is several hundred KB of HTML; compressed it is a
+  // small fraction of that, which matters on slow office networks.
+  app.use(compress());
   app.use(async (c, next) => {
     await next();
     const images = config.allowExternalImages ? "* data:" : "'self' data:";

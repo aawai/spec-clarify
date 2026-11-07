@@ -163,6 +163,7 @@ TZ=Asia/Shanghai npx spec-clarify serve --config /srv/project/spec-clarify.confi
 - 经公网或不可信网络访问时，放在提供 HTTPS 的反向代理之后，并开启 `--secure-cookies`。
 - 数据库使用 WAL 模式。备份用 SQLite 在线备份（`sqlite3 data/spec-clarify.db ".backup backup.db"`），不要只复制主文件；也可以定期导出记录纳入版本控制。
 - 每次请求都重新读取源文档与审核文档，`git pull` 后刷新页面即可。
+- 浏览器声明支持时，页面与样式以 gzip 压缩传输（数百个条目的列表页未压缩可达数百 KB）；前置反向代理时无需再另行开启压缩。
 - `Ctrl+C` 或 `SIGTERM` 关闭服务与数据库后退出。
 
 ## 开发

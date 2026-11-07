@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { test } from "node:test";
 import { hashPassword } from "../auth.js";
 import { loadProjectConfig } from "../project.js";
@@ -221,5 +222,20 @@ test("a clarification against an edited item is refused, and removed items keep 
     await writeReview(REVIEW.replace("### A3 退出日志\n", ""));
     const exported = await (await app.request("/export.md", { headers: { Cookie: pm } })).text();
     assert.match(exported, /## 已从审核文档移除的条目\n\n### A3\n\n- .* 产品 澄清：\n {2}> 需要/);
+  });
+});
+
+test("pages are sent gzip-compressed to browsers that accept it", async () => {
+  await withSite(async ({ app }) => {
+    const pm = await signIn(app, "pm");
+    const response = await app.request("/", {
+      headers: { Cookie: pm, "Accept-Encoding": "gzip, deflate, br" },
+    });
+    assert.equal(response.headers.get("Content-Encoding"), "gzip");
+    const page = gunzipSync(Buffer.from(await response.arrayBuffer())).toString("utf8");
+    assert.match(page, /A1/);
+
+    const plain = await app.request("/", { headers: { Cookie: pm } });
+    assert.equal(plain.headers.get("Content-Encoding"), null);
   });
 });
