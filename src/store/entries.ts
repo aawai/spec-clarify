@@ -1,3 +1,4 @@
+import { isRole, type Role } from "./users.js";
 import type { Client, Row } from "@libsql/client";
 
 export type EntryKind = "clarification" | "comment";
@@ -11,7 +12,7 @@ export interface Entry {
   id: number;
   itemId: string;
   kind: EntryKind;
-  author: { id: number; username: string; displayName: string };
+  author: { id: number; username: string; displayName: string; role: Role };
   body: string;
   /** Digest of the item text the author was looking at. */
   itemDigest: string;
@@ -38,12 +39,14 @@ export interface ItemActivity {
   lastActivity: string;
 }
 
-const SELECT = `SELECT entries.*, users.username, users.display_name
+const SELECT = `SELECT entries.*, users.username, users.display_name, users.role
   FROM entries JOIN users ON users.id = entries.user_id`;
 
 function toEntry(row: Row): Entry {
   const kind = String(row.kind);
   if (kind !== "clarification" && kind !== "comment") throw new Error(`Unknown entry kind ${kind}`);
+  const role = String(row.role);
+  if (!isRole(role)) throw new Error(`Unknown role ${role}`);
   return {
     id: Number(row.id),
     itemId: String(row.item_id),
@@ -52,6 +55,7 @@ function toEntry(row: Row): Entry {
       id: Number(row.user_id),
       username: String(row.username),
       displayName: String(row.display_name),
+      role,
     },
     body: String(row.body),
     itemDigest: String(row.item_digest),

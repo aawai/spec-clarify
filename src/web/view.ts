@@ -71,7 +71,7 @@ export function alert(
   return html`<div class="alert alert--${tone}" role="${tone === "danger" ? "alert" : "status"}">
     <div class="alert__content">
       <p class="alert__title">${title}</p>
-      ${description ? html`<p class="alert__description">${description}</p>` : ""}
+      ${description ? html`<div class="alert__description">${description}</div>` : ""}
     </div>
   </div>`;
 }
@@ -121,12 +121,19 @@ export function layout(options: LayoutOptions, body: Html): Html {
                       ${navLink("items", "/", "澄清条目")} ${navLink("docs", "/docs", "文档")}
                     </nav>
                     <div class="user-menu">
-                      <a class="button button--secondary button--sm" href="/export.md">导出记录</a>
                       <a
-                        class="button button--ghost button--sm"
+                        class="button button--secondary button--sm"
+                        href="/export.md"
+                        title="导出本项目全部条目的澄清状态与完整历史记录（Markdown，不受当前筛选影响）"
+                        >导出记录</a
+                      >
+                      <a
+                        class="button button--ghost button--sm user-menu__account"
                         href="/account"
                         ${active === "account" ? html`aria-current="page"` : ""}
-                        >${user.displayName}（${ROLE_LABELS[user.role]}）</a
+                        >${user.displayName}<span class="user-menu__role"
+                          >（${ROLE_LABELS[user.role]}）</span
+                        ></a
                       >
                       <form method="post" action="/logout">
                         <button class="button button--ghost button--sm" type="submit">退出</button>
