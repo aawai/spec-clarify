@@ -305,7 +305,7 @@ export function renderDiffHtml(oldSource: string | undefined, newSource: string)
     const rangeLabel =
       firstNew !== undefined && lastNew !== undefined ? `第 ${firstNew}–${lastNew} 行` : "";
     chunks.push(
-      `<details class="diff-Hunk-expand"><summary class="diff__expand">展开未变更的 ${hidden.length} 行${rangeLabel ? `（${rangeLabel}）` : ""}</summary><div class="diff__folded">${hidden.map((line) => renderRow(line)).join("")}</div></details>`,
+      `<details class="diff__fold"><summary class="diff__expand">展开未变更的 ${hidden.length} 行${rangeLabel ? `（${rangeLabel}）` : ""}</summary><div class="diff__folded">${hidden.map((line) => renderRow(line)).join("")}</div></details>`,
     );
   }
 

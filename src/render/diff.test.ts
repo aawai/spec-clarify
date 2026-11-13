@@ -36,7 +36,7 @@ test("renderDiffHtml renders inline word/char diffs, escapes HTML, and folds lon
   assert.match(html, /<ins>3<\/ins>/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-  assert.match(html, /<details class="diff-Hunk-expand">/);
+  assert.match(html, /<details class="diff__fold">/);
   // Dual line numbers on changed line (13 -> 13)
   assert.match(html, /<span class="diff__num">13<\/span><span class="diff__num"><\/span>/);
   assert.match(html, /<span class="diff__num"><\/span><span class="diff__num">13<\/span>/);
