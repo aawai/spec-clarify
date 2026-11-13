@@ -75,7 +75,7 @@ const SESSION_COOKIE = "spec_clarify_session";
 const NO_SEVERITY = "none";
 const MAX_LOGIN_FAILURES = 5;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
-
+const PAGE_SIZE = 50;
 type ListStatus = ItemStatus | "awaiting" | "pending" | "all";
 const LIST_STATUS_LABELS: Record<ListStatus, string> = {
   ...STATUS_LABELS,
@@ -88,13 +88,25 @@ const LIST_STATUSES: ListStatus[] = ["pending", "all", ...STATUSES, "awaiting"];
 /** List filters; detail pages carry them along so paging and "back to list" stay in the same view. */
 const ListQuery = z.object({
   group: z.string().optional(),
-  status: z.enum(LIST_STATUSES as [ListStatus, ...ListStatus[]]).optional(),
+  status: z
+    .enum(LIST_STATUSES as [ListStatus, ...ListStatus[]])
+    .optional()
+    .catch(undefined),
   severity: z.string().optional(),
   q: z.string().trim().optional(),
+  page: z.string().optional(),
 });
-type ListFilter = z.infer<typeof ListQuery>;
+type ListFilter = Omit<z.infer<typeof ListQuery>, "page"> & { page?: number };
 const FILTER_KEYS = ["group", "status", "severity", "q"] as const;
 
+const STATUS_DESCRIPTIONS: Record<ListStatus, string> = {
+  pending: "未澄清、需复核与待回复的条目",
+  all: "审核文档中的全部条目",
+  open: "尚未提交任何澄清",
+  stale: "澄清后条目内容有更新，需重新确认",
+  awaiting: "最近一次澄清后又有新评论/追问",
+  clarified: "已基于当前条目内容完成澄清",
+};
 const Body = z.string().trim().min(1, "内容不能为空").max(5000, "内容不超过 5000 字");
 /** `base` (the latest clarification the author saw) is required for clarifications only. */
 const EntryForm = z.object({
@@ -117,18 +129,28 @@ interface FormState {
   kind: "clarification" | "comment";
   error: string;
   body: string;
+  conflictLatest?: Entry;
 }
 
 function defaultStatus(user: User): ListStatus {
   return canClarify(user.role) ? "pending" : "all";
 }
 
+function parsePage(value: string | undefined): number | undefined {
+  if (!value || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : undefined;
+}
+
 function parseFilter(c: Context<Env>): ListFilter {
   const parsed = ListQuery.safeParse(c.req.query());
   const filter = parsed.success ? parsed.data : {};
   return {
-    ...filter,
+    group: filter.group,
     status: filter.status ?? defaultStatus(session(c).user),
+    severity: filter.severity,
+    q: filter.q,
+    page: parsePage(filter.page),
   };
 }
 
@@ -140,8 +162,22 @@ function filterSearch(filter: ListFilter, overrides: Partial<ListFilter> = {}): 
     const value = merged[key];
     if (value) params.set(key, value);
   }
+  if (merged.page && merged.page > 1) params.set("page", String(merged.page));
   const search = params.toString();
   return search ? `?${search}` : "";
+}
+
+function pageNumbers(current: number, total: number): (number | "ellipsis")[] {
+  const shown = new Set<number>([1, total]);
+  for (let p = Math.max(1, current - 1); p <= Math.min(total, current + 1); p++) shown.add(p);
+  const sorted = [...shown].sort((a, b) => a - b);
+  const result: (number | "ellipsis")[] = [];
+  for (const pageNumber of sorted) {
+    const previous = result.at(-1);
+    if (typeof previous === "number" && pageNumber - previous > 1) result.push("ellipsis");
+    result.push(pageNumber);
+  }
+  return result;
 }
 
 function hasActiveFilter(filter: ListFilter, user: User): boolean {
@@ -617,37 +653,47 @@ export function createApp(options: AppOptions) {
     const groupLink = (group: ReviewGroup | undefined) => {
       const groupItems = group ? review.items.filter((item) => item.group === group) : review.items;
       const done = clarified(groupItems);
+      const pendingCount = groupItems.filter((item) =>
+        matchesFilter(item, state(item), { status: "pending" }),
+      ).length;
       const current = group?.key === filter.group;
       return html`<a
         class="group-nav__link"
-        href="/${filterSearch(filter, { group: group?.key })}"
+        href="/${filterSearch(filter, { group: group?.key, page: undefined })}"
         ${current ? html`aria-current="true"` : ""}
       >
         <span>${group ? group.label : "全部条目"}</span>
-        ${
-          filter.status === "pending"
-            ? html`<span class="group-nav__count"
-                >${groupItems.filter((item) => matchesFilter(item, state(item), { status: "pending" })).length}</span
-              >`
-            : html`<span class="group-nav__count">${done}/${groupItems.length}</span>
-                ${progressBar(done, groupItems.length)}`
-        }
+        <span class="group-nav__counts">
+          ${
+            filter.status === "pending"
+              ? html`<span
+                  class="group-nav__badge${pendingCount ? "" : " is-zero"}"
+                  title="待处理条目数"
+                  >待 ${pendingCount}</span
+                >`
+              : ""
+          }
+          <span class="group-nav__count" title="已澄清 / 总条目数"
+            >${done}/${groupItems.length}</span
+          >
+        </span>
+        ${progressBar(done, groupItems.length)}
       </a>`;
     };
 
-    const statusTab = (value: ListStatus | undefined, label: string) => {
-      const count = value
-        ? statusScope.filter((item) => matchesFilter(item, state(item), { status: value })).length
-        : statusScope.length;
+    const statusTab = (value: ListStatus, label: string) => {
+      const count = statusScope.filter((item) =>
+        matchesFilter(item, state(item), { status: value }),
+      ).length;
       return html`<a
         class="tabs__tab"
-        href="/${filterSearch(filter, { status: value })}"
+        href="/${filterSearch(filter, { status: value, page: undefined })}"
+        title="${STATUS_DESCRIPTIONS[value]}"
         ${value === filter.status ? html`aria-current="true"` : ""}
       >
         ${label}<span class="tab-count">${count}</span>
       </a>`;
     };
-
     const option = (value: string, label: string, selected: string | undefined) =>
       html`<option value="${value}" ${value === (selected ?? "") ? "selected" : ""}>
         ${label}
@@ -669,9 +715,17 @@ export function createApp(options: AppOptions) {
         </select>`
       : "";
 
-    const itemSearch = filterSearch(filter);
-    const hasActivity = items.some((item) => activity.has(item.id));
-    const table = items.length
+    const totalItems = items.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+    const currentPage = Math.min(filter.page ?? 1, totalPages);
+    const pageStart = (currentPage - 1) * PAGE_SIZE;
+    const pagedItems = items.slice(pageStart, pageStart + PAGE_SIZE);
+    const displayStart = totalItems ? pageStart + 1 : 0;
+    const displayEnd = pageStart + pagedItems.length;
+    const pageFilter: ListFilter = { ...filter, page: currentPage > 1 ? currentPage : undefined };
+    const itemSearch = filterSearch(pageFilter);
+
+    const table = totalItems
       ? html`<div class="table-root table-root--secondary items">
           <div class="table__scroll-container">
             <table class="table__content">
@@ -681,16 +735,12 @@ export function createApp(options: AppOptions) {
                   <th class="table__column">条目</th>
                   <th class="table__column col-chip">严重度</th>
                   <th class="table__column col-status">状态</th>
-                  ${
-                    hasActivity
-                      ? html`<th class="table__column col-num">记录</th>
-                          <th class="table__column col-time">最近更新</th>`
-                      : ""
-                  }
+                  <th class="table__column col-num">记录</th>
+                  <th class="table__column col-time">最近更新</th>
                 </tr>
               </thead>
               <tbody class="table__body">
-                ${items.map((item) => {
+                ${pagedItems.map((item) => {
                   const itemActivity = activity.get(item.id);
                   const { status, awaitingReply } = state(item);
                   return html`<tr class="table__row">
@@ -716,16 +766,12 @@ export function createApp(options: AppOptions) {
                         ${statusChip(status)} ${awaitingReply ? awaitingChip() : ""}
                       </div>
                     </td>
-                    ${
-                      hasActivity
-                        ? html`<td class="table__cell col-num">
-                              ${itemActivity?.entryCount || ""}
-                            </td>
-                            <td class="table__cell col-time muted">
-                              ${itemActivity ? formatTime(itemActivity.lastActivity) : ""}
-                            </td>`
-                        : ""
-                    }
+                    <td class="table__cell col-num">
+                      ${itemActivity?.entryCount ? itemActivity.entryCount : "—"}
+                    </td>
+                    <td class="table__cell col-time muted">
+                      ${itemActivity ? formatTime(itemActivity.lastActivity) : "—"}
+                    </td>
                   </tr>`;
                 })}
               </tbody>
@@ -761,44 +807,165 @@ export function createApp(options: AppOptions) {
               ${progressBar(clarified(review.items), review.items.length, "已澄清")}
             </div>
           </div>
-          <div class="list-layout">
-            <nav
-              class="card card--default group-nav"
-              aria-label="${filter.status === "pending" ? "分组（待处理数）" : "分组"}"
-            >
-              ${filter.status === "pending" ? html`<div class="group-nav__section">分组 · 待处理数</div>` : ""}
-              ${groupLink(undefined)}
-              ${groupSections(review.groups).map(
-                (section) =>
-                  html`<div class="group-nav__section">
-                      ${section.groups[0] ? groupLabel(workspace, section.title, section.groups[0]) : section.title}
-                    </div>
-                    ${section.groups.map(groupLink)}`,
-              )}
-            </nav>
-            <section>
-              <nav class="status-tabs" aria-label="状态">
-                ${LIST_STATUSES.map((value) => statusTab(value, LIST_STATUS_LABELS[value]))}
+          ${(() => {
+            const activeGroup = filter.group
+              ? review.groups.find((group) => group.key === filter.group)
+              : undefined;
+            const activeGroupItems = activeGroup
+              ? review.items.filter((item) => item.group === activeGroup)
+              : review.items;
+            const activeDone = clarified(activeGroupItems);
+            const activePending = activeGroupItems.filter((item) =>
+              matchesFilter(item, state(item), { status: "pending" }),
+            ).length;
+            const groupNavInner = html`${
+              filter.status === "pending"
+                ? html`<div class="group-nav__section">分组 · 待处理 / 已澄清</div>`
+                : ""
+            }
+            ${groupLink(undefined)}
+            ${groupSections(review.groups).map(
+              (section) =>
+                html`<div class="group-nav__section">
+                    ${section.groups[0] ? groupLabel(workspace, section.title, section.groups[0]) : section.title}
+                  </div>
+                  ${section.groups.map(groupLink)}`,
+            )}`;
+            const pageHref = (targetPage: number) =>
+              `/${filterSearch(filter, { page: targetPage > 1 ? targetPage : undefined })}`;
+            const listFooter = totalItems
+              ? html`<div class="list-footer">
+                  <span class="list-footer__range"
+                    >第 ${displayStart}–${displayEnd} 条，共 ${totalItems} 条<span
+                      class="list-footer__export"
+                    >
+                      · 顶栏「导出记录」导出全部 ${review.items.length} 条</span
+                    ></span
+                  >
+                  ${
+                    totalPages > 1
+                      ? html`<nav class="pagination" aria-label="分页">
+                          ${
+                            currentPage > 1
+                              ? html`<a
+                                  class="button button--secondary button--sm"
+                                  href="${pageHref(currentPage - 1)}"
+                                  accesskey="p"
+                                  title="上一页（accesskey: p）"
+                                  >‹ 上一页</a
+                                >`
+                              : html`<span
+                                  class="button button--secondary button--sm"
+                                  aria-disabled="true"
+                                  >‹ 上一页</span
+                                >`
+                          }
+                          <div class="pagination__pages">
+                            ${pageNumbers(currentPage, totalPages).map((entry) =>
+                              entry === "ellipsis"
+                                ? html`<span class="pagination__ellipsis" aria-hidden="true"
+                                    >…</span
+                                  >`
+                                : html`<a
+                                    class="pagination__page"
+                                    href="${pageHref(entry)}"
+                                    ${entry === currentPage ? html`aria-current="page"` : ""}
+                                    >${entry}</a
+                                  >`,
+                            )}
+                          </div>
+                          ${
+                            currentPage < totalPages
+                              ? html`<a
+                                  class="button button--secondary button--sm"
+                                  href="${pageHref(currentPage + 1)}"
+                                  accesskey="n"
+                                  title="下一页（accesskey: n）"
+                                  >下一页 ›</a
+                                >`
+                              : html`<span
+                                  class="button button--secondary button--sm"
+                                  aria-disabled="true"
+                                  >下一页 ›</span
+                                >`
+                          }
+                        </nav>`
+                      : ""
+                  }
+                </div>`
+              : "";
+            return html`<div class="list-layout">
+              <nav
+                class="card card--default group-nav group-nav--desktop"
+                aria-label="${filter.status === "pending" ? "分组（待处理与已澄清进度）" : "分组"}"
+              >
+                ${groupNavInner}
               </nav>
-              <form class="filter-bar" method="get" action="/" role="search">
-                ${filter.group ? html`<input type="hidden" name="group" value="${filter.group}" />` : ""}
-                ${filter.status ? html`<input type="hidden" name="status" value="${filter.status}" />` : ""}
-                ${severitySelect}
-                <input
-                  class="input"
-                  type="search"
-                  name="q"
-                  value="${filter.q ?? ""}"
-                  placeholder="搜索编号或关键词"
-                  aria-label="关键词"
-                />
-                <button class="button button--primary" type="submit">筛选</button>
-                ${activeFilter ? html`<a class="button button--ghost" href="/">清除筛选</a>` : ""}
-                <span class="result-count">显示 ${items.length} / ${review.items.length} 条</span>
-              </form>
-              ${table}
-            </section>
-          </div>`,
+              <details class="card card--default group-nav-mobile">
+                <summary class="group-nav-mobile__summary">
+                  <span>分组：${activeGroup ? activeGroup.label : "全部条目"}</span>
+                  <span class="group-nav-mobile__meta">
+                    ${filter.status === "pending" ? `待 ${activePending} · ` : ""}${activeDone}/${activeGroupItems.length}
+                  </span>
+                </summary>
+                <nav class="group-nav-mobile__list" aria-label="分组">${groupNavInner}</nav>
+              </details>
+              <section>
+                <div class="status-bar">
+                  <nav class="status-tabs" aria-label="状态">
+                    <span class="status-tabs__group" role="group" aria-label="视图">
+                      ${statusTab("pending", LIST_STATUS_LABELS.pending)}
+                      ${statusTab("all", LIST_STATUS_LABELS.all)}
+                    </span>
+                    <span class="status-tabs__sep" aria-hidden="true"></span>
+                    <span class="status-tabs__group" role="group" aria-label="状态分布">
+                      ${statusTab("open", LIST_STATUS_LABELS.open)}
+                      ${statusTab("stale", LIST_STATUS_LABELS.stale)}
+                      ${statusTab("awaiting", LIST_STATUS_LABELS.awaiting)}
+                      ${statusTab("clarified", LIST_STATUS_LABELS.clarified)}
+                    </span>
+                  </nav>
+                  ${
+                    filter.status === "pending"
+                      ? html`<p class="status-hint muted">
+                          需我处理 = 未澄清 + 需复核 +
+                          待回复（按严重度排序）；右上角仅统计已澄清进度。
+                        </p>`
+                      : filter.status === "awaiting"
+                        ? html`<p class="status-hint muted">
+                            状态分布：仅显示最近一次澄清后又有新评论 / 追问的条目。
+                          </p>`
+                        : ""
+                  }
+                </div>
+                <form class="filter-bar" method="get" action="/" role="search">
+                  ${filter.group ? html`<input type="hidden" name="group" value="${filter.group}" />` : ""}
+                  ${filter.status ? html`<input type="hidden" name="status" value="${filter.status}" />` : ""}
+                  ${severitySelect}
+                  <input
+                    class="input"
+                    type="search"
+                    name="q"
+                    value="${filter.q ?? ""}"
+                    placeholder="搜索编号或关键词"
+                    aria-label="关键词"
+                    accesskey="q"
+                    title="搜索编号或关键词（accesskey: q）"
+                  />
+                  <button class="button button--primary" type="submit">筛选</button>
+                  ${activeFilter ? html`<a class="button button--ghost" href="/">清除筛选</a>` : ""}
+                  <span class="result-count"
+                    >${
+                      totalItems === review.items.length
+                        ? `共 ${totalItems} 条`
+                        : `筛选结果 ${totalItems} / ${review.items.length} 条`
+                    }</span
+                  >
+                </form>
+                ${table} ${listFooter}
+              </section>
+            </div>`;
+          })()}`,
       ),
     );
   });
@@ -862,10 +1029,23 @@ export function createApp(options: AppOptions) {
     const next = nextInFilter(items, index, filter, activity);
     const position = matching.indexOf(item);
 
+    const prefill = c.req.query("prefill") === "1";
     const itemHref = (target: string) => `/items/${encodeURIComponent(target)}${search}`;
-    const pagerButton = (target: ReviewItem | undefined, label: string) =>
+    const prefillParams = new URLSearchParams(search.slice(1));
+    prefillParams.set("prefill", "1");
+    const prefillHref = `/items/${encodeURIComponent(item.id)}?${prefillParams}#clarify`;
+    const pagerButton = (
+      target: ReviewItem | undefined,
+      label: string,
+      shortcut: string,
+      shortcutTitle: string,
+    ) =>
       target
-        ? html`<a class="button button--tertiary button--sm" href="${itemHref(target.id)}"
+        ? html`<a
+            class="button button--tertiary button--sm"
+            href="${itemHref(target.id)}"
+            accesskey="${shortcut}"
+            title="${shortcutTitle}（accesskey: ${shortcut}）"
             >${label}</a
           >`
         : html`<span class="button button--tertiary button--sm" aria-disabled="true"
@@ -879,6 +1059,9 @@ export function createApp(options: AppOptions) {
           >`,
       );
 
+    const singleClarificationOnly =
+      history.length === 1 && Boolean(clarification) && history[0]?.id === clarification?.id;
+
     const entryView = (entry: Entry) =>
       html`<li id="entry-${entry.id}" class="entry entry--${entry.kind}">
         <span class="avatar avatar--sm avatar--soft" aria-hidden="true">
@@ -890,64 +1073,131 @@ export function createApp(options: AppOptions) {
         <div>
           <div class="entry__meta">
             <span class="entry__author">${entry.author.displayName}</span>
+            <span class="chip chip--soft chip--default chip--role"
+              >${ROLE_LABELS[entry.author.role]}</span
+            >
             <span class="muted">${ENTRY_LABELS[entry.kind]}</span>
             <span class="muted">${formatTime(entry.createdAt)}</span>
             ${entry.itemDigest !== item.digest ? staleChip("基于旧版条目") : ""}
           </div>
-          <div class="prose entry__body">${raw(entryMd.render(entry.body, env))}</div>
+          ${
+            singleClarificationOnly
+              ? html`<p class="muted entry__deduped">
+                  仅此 1 条澄清记录，完整正文见「<a href="#current-clarification">当前澄清</a>」。
+                </p>`
+              : html`<div class="prose entry__body">${raw(entryMd.render(entry.body, env))}</div>`
+          }
         </div>
       </li>`;
 
-    const errorFor = (kind: FormState["kind"]) =>
-      form?.kind === kind ? alert("danger", "提交未成功", form.error) : "";
-    const valueFor = (kind: FormState["kind"]) => (form?.kind === kind ? form.body : "");
+    const errorFor = (kind: FormState["kind"]) => {
+      if (form?.kind !== kind) return "";
+      if (kind === "clarification" && form.conflictLatest) {
+        const latest = form.conflictLatest;
+        const excerpt = latest.body.length > 280 ? `${latest.body.slice(0, 280)}…` : latest.body;
+        return alert(
+          "danger",
+          "提交未成功",
+          html`<p>${form.error}</p>
+            <div class="conflict-latest">
+              <div class="conflict-latest__label">
+                ${latest.author.displayName}（${ROLE_LABELS[latest.author.role]}）的最新澄清摘要：
+              </div>
+              <div class="prose conflict-latest__body">${raw(entryMd.render(excerpt, env))}</div>
+            </div>`,
+        );
+      }
+      return alert("danger", "提交未成功", form.error);
+    };
+    const valueFor = (kind: FormState["kind"]) => {
+      if (form?.kind === kind) return form.body;
+      if (kind === "clarification" && prefill && clarification) return clarification.body;
+      return "";
+    };
     const action = (kind: string) => `/items/${encodeURIComponent(item.id)}/${kind}${search}`;
 
-    const clarifyForm = canClarify(user.role)
-      ? html`<details
-          class="card card--default card--padded"
-          ${!clarification || form?.kind === "clarification" || status === "stale" ? "open" : ""}
+    const clarifyFormInner = html`<form
+      method="post"
+      action="${action("clarifications")}"
+      class="form"
+    >
+      ${errorFor("clarification")}
+      <input type="hidden" name="digest" value="${item.digest}" />
+      <input type="hidden" name="base" value="${clarification?.id ?? 0}" />
+      <div class="field">
+        <div class="field__label-row">
+          <label class="field__label" for="clarify-body">澄清内容</label>
+          ${
+            clarification
+              ? prefill && form?.kind !== "clarification"
+                ? html`<span class="field__hint"
+                    >已载入上一版 · <a href="${itemHref(item.id)}#clarify">清空</a></span
+                  >`
+                : html`<a class="button button--tertiary button--sm" href="${prefillHref}"
+                    >载入上一版正文</a
+                  >`
+              : ""
+          }
+        </div>
+        <textarea
+          id="clarify-body"
+          class="textarea textarea--full-width clarify-textarea"
+          name="body"
+          rows="7"
+          required
+          maxlength="5000"
+          placeholder="写明结论、依据，以及需要回写到哪份文档"
         >
-          <summary class="section-title">${clarification ? "更新澄清" : "提交澄清"}</summary>
-          <form method="post" action="${action("clarifications")}" class="form" id="clarify">
-            ${errorFor("clarification")}
-            <input type="hidden" name="digest" value="${item.digest}" />
-            <input type="hidden" name="base" value="${clarification?.id ?? 0}" />
-            <label class="field">
-              <span class="field__label">澄清内容</span>
-              <textarea
-                class="textarea textarea--full-width"
-                name="body"
-                rows="6"
-                required
-                maxlength="5000"
-                placeholder="写明结论、依据，以及需要回写到哪份文档"
-              >
 ${valueFor("clarification")}</textarea>
-              <span class="field__hint"
-                >${status === "stale" ? "审核文档已修改，请对照上方「当前澄清」调整后重新提交。" : `以 ${user.displayName} 的名义提交。记录只追加，更正请再提交一次。`}</span
+        <span class="field__hint">
+          ${
+            status === "stale"
+              ? "审核文档已修改，请对照上方「当前澄清」调整后重新提交。"
+              : `以 ${user.displayName} 的名义提交，记录只追加。`
+          }支持
+          Markdown 与 <code>文件:行号</code> 自动链接。
+        </span>
+      </div>
+      ${
+        next
+          ? html`<div class="clarify-actions">
+              <button
+                class="button button--primary button--full-width"
+                type="submit"
+                name="after"
+                value="next"
+                accesskey="s"
+                title="${clarification ? "更新澄清并进入下一条" : "提交澄清并进入下一条"}（accesskey: s）"
               >
-            </label>
-            ${
-              next
-                ? html`<button
-                    class="button button--primary button--full-width"
-                    type="submit"
-                    name="after"
-                    value="next"
-                  >
-                    ${clarification ? "更新并下一条" : "提交并下一条"}
-                  </button>`
-                : ""
-            }
-            <button
-              class="button ${next ? "button--secondary" : "button--primary"} button--full-width"
-              type="submit"
-            >
+                ${clarification ? "更新并下一条" : "提交并下一条"}
+              </button>
+              <button
+                class="button button--secondary button--sm clarify-actions__stay"
+                type="submit"
+              >
+                ${clarification ? "更新澄清" : "提交澄清"}
+              </button>
+            </div>`
+          : html`<button class="button button--primary button--full-width" type="submit">
               ${clarification ? "更新澄清" : "提交澄清"}
-            </button>
-          </form>
-        </details>`
+            </button>`
+      }
+    </form>`;
+
+    const clarifyForm = canClarify(user.role)
+      ? clarification
+        ? html`<details
+            id="clarify"
+            class="card card--default card--padded"
+            ${form?.kind === "clarification" || status === "stale" || prefill ? "open" : ""}
+          >
+            <summary class="section-title">更新澄清</summary>
+            ${clarifyFormInner}
+          </details>`
+        : html`<section id="clarify" class="card card--default card--padded">
+            <h2 class="section-title">提交澄清</h2>
+            ${clarifyFormInner}
+          </section>`
       : html`<section class="card card--default card--padded">
           <p class="readonly-note">澄清由产品方提交。对条目或澄清有疑问，请在评论中追问。</p>
         </section>`;
@@ -961,17 +1211,19 @@ ${valueFor("clarification")}</textarea>
           >
           <span class="breadcrumbs__separator" aria-hidden="true">/</span>
           <span class="breadcrumbs__item"
-            ><a class="breadcrumbs__link" href="/${filterSearch(filter, { group: item.group.key })}"
+            ><a
+              class="breadcrumbs__link"
+              href="/${filterSearch(filter, { group: item.group.key, page: undefined })}"
               >${groupLabel(workspace, item.group.title, item.group)}</a
             ></span
           >
         </nav>
         <nav class="pager" aria-label="翻页">
-          ${pagerButton(previous, "‹ 上一条")}
+          ${pagerButton(previous, "‹ 上一条", "p", "上一条")}
           <span class="pager__position">
             ${position >= 0 ? `${position + 1} / ${matching.length}` : `不在筛选结果中（共 ${matching.length} 条）`}
           </span>
-          ${pagerButton(next, "下一条 ›")}
+          ${pagerButton(next, "下一条 ›", "n", "下一条")}
         </nav>
       </div>
       <header class="item-head">
@@ -985,7 +1237,31 @@ ${valueFor("clarification")}</textarea>
           >
         </div>
       </header>
-      ${status === "stale" ? alert("danger", "本条目在最近一次澄清后已修改", "请核对审核文档的最新内容，确认澄清是否仍然成立并重新提交。") : ""}
+      <div class="mobile-jump">
+        ${
+          canClarify(user.role)
+            ? html`<a class="button button--primary button--sm" href="#clarify"
+                >${clarification ? "更新澄清 ↓" : "提交澄清 ↓"}</a
+              >`
+            : ""
+        }
+        <a class="button button--secondary button--sm" href="#comment">评论 / 追问 ↓</a>
+        ${excerpts.length ? html`<a class="button button--tertiary button--sm" href="#sources">原文对照 ↓</a>` : ""}
+      </div>
+      ${
+        status === "stale"
+          ? alert(
+              "danger",
+              "本条目在最近一次澄清后已修改",
+              canClarify(user.role) && clarification
+                ? html`请核对审核文档的最新内容，确认澄清是否仍然成立并重新提交。<a
+                      href="${prefillHref}"
+                      >载入上一版正文对照修改</a
+                    >`
+                : "请核对审核文档的最新内容，确认澄清是否仍然成立并重新提交。",
+            )
+          : ""
+      }
       ${showReceipt ? html`<div class="alert alert--success" role="status">澄清已保存。<a href="/items/${encodeURIComponent(receipt.previous)}${search}#entry-${receipt.entryId}">返回上一条查看记录</a>${receipt.previous === id ? "；当前筛选中没有下一条。" : ""}</div>` : ""}
       <div class="detail-layout">
         <div class="detail-main">
@@ -1021,11 +1297,12 @@ ${valueFor("clarification")}</textarea>
             }
           </details>
           <details
+            id="comment"
             class="card card--default card--padded"
             ${!canClarify(user.role) || form?.kind === "comment" ? "open" : ""}
           >
             <summary class="section-title">评论 / 追问</summary>
-            <form method="post" action="${action("comments")}" class="form composer" id="comment">
+            <form method="post" action="${action("comments")}" class="form composer">
               ${errorFor("comment")}
               <input type="hidden" name="digest" value="${item.digest}" />
               <textarea
@@ -1039,7 +1316,9 @@ ${valueFor("clarification")}</textarea>
               >
 ${valueFor("comment")}</textarea>
               <div class="form-actions">
-                <span class="field__hint">以 ${user.displayName} 的名义发表</span>
+                <span class="field__hint"
+                  >以 ${user.displayName} 的名义发表 · 支持 Markdown 与 <code>文件:行号</code></span
+                >
                 <button class="button button--secondary" type="submit">发表</button>
               </div>
             </form>
@@ -1049,6 +1328,7 @@ ${valueFor("comment")}</textarea>
           ${
             clarification
               ? html`<section
+                  id="current-clarification"
                   class="card card--default card--padded conclusion ${status === "stale" ? "is-stale" : ""}"
                 >
                   <h2 class="section-title">当前澄清 ${statusChip(status)}</h2>
@@ -1056,7 +1336,11 @@ ${valueFor("comment")}</textarea>
                     ${raw(entryMd.render(clarification.body, env))}
                   </div>
                   <div class="conclusion__meta">
-                    ${clarification.author.displayName} · ${formatTime(clarification.createdAt)}
+                    <span>${clarification.author.displayName}</span>
+                    <span class="chip chip--soft chip--default chip--role"
+                      >${ROLE_LABELS[clarification.author.role]}</span
+                    >
+                    <span>· ${formatTime(clarification.createdAt)}</span>
                   </div>
                 </section>`
               : ""
@@ -1079,9 +1363,8 @@ ${valueFor("comment")}</textarea>
       });
     }
     const submitted = await c.req.parseBody();
-    const fail = (error: string, status: 409 | 422) =>
-      renderItem(c, id, { kind, error, body: text(submitted, "body") }, status);
-
+    const fail = (error: string, status: 409 | 422, conflictLatest?: Entry) =>
+      renderItem(c, id, { kind, error, body: text(submitted, "body"), conflictLatest }, status);
     const parsed = EntryForm.safeParse(submitted);
     if (!parsed.success)
       return fail(parsed.error.issues.map((issue) => issue.message).join("；"), 422);
@@ -1110,8 +1393,9 @@ ${valueFor("comment")}</textarea>
     if (!result.ok) {
       const { latest } = result;
       return fail(
-        `${latest.author.displayName} 已于 ${formatTime(latest.createdAt)} 提交了新的澄清，请阅读后再提交。你的内容已保留。`,
+        `${latest.author.displayName}（${ROLE_LABELS[latest.author.role]}）已于 ${formatTime(latest.createdAt)} 提交了新的澄清，请阅读后再提交。你的内容已保留。`,
         409,
+        latest,
       );
     }
     if (kind === "clarification" && form.after === "next") {
@@ -1277,6 +1561,15 @@ ${valueFor("comment")}</textarea>
     const addedIdx = doc.addedInRevision
       ? config.revisions.findIndex((rev) => rev.id === doc.addedInRevision)
       : -1;
+    const docNavLinks = documents.map(
+      (other) =>
+        html`<a
+          class="group-nav__link"
+          href="${other.addedInRevision ? docHref(other.path, undefined, undefined, other.addedInRevision) : docHref(other.path)}"
+          ${other.path === doc.path ? html`aria-current="true"` : ""}
+          ><span>${documentLabel(workspace, other.path)}</span></a
+        >`,
+    );
 
     return c.html(
       page(
@@ -1284,17 +1577,15 @@ ${valueFor("comment")}</textarea>
         activeRevConfig ? `${doc.title}（${activeRevConfig.label}）` : doc.title,
         "docs",
         html`<div class="docs-layout">
-          <nav class="card card--default group-nav" aria-label="文档">
-            ${documents.map(
-              (other) =>
-                html`<a
-                  class="group-nav__link"
-                  href="${other.addedInRevision ? docHref(other.path, undefined, undefined, other.addedInRevision) : docHref(other.path)}"
-                  ${other.path === doc.path ? html`aria-current="true"` : ""}
-                  ><span>${documentLabel(workspace, other.path)}</span></a
-                >`,
-            )}
+          <nav class="card card--default group-nav group-nav--desktop" aria-label="文档">
+            ${docNavLinks}
           </nav>
+          <details class="card card--default group-nav-mobile">
+            <summary class="group-nav-mobile__summary">
+              <span>文档：${documentLabel(workspace, doc.path)}</span>
+            </summary>
+            <nav class="group-nav-mobile__list" aria-label="文档">${docNavLinks}</nav>
+          </details>
           <div class="card card--default doc-card">
             <nav class="breadcrumbs" aria-label="位置">
               <span class="breadcrumbs__item"

@@ -595,3 +595,134 @@ test("shell brand mark, login heading hierarchy, and item-head title-first order
     assert.doesNotMatch(headMeta, /审核 · 登录/);
   });
 });
+
+test("list keeps stable columns across status tabs, shows pending context, and paginates 100+ items", async () => {
+  await withSite(async ({ app, writeReview }) => {
+    const lines = ["# 审核", "", "## 批量组"];
+    for (let i = 1; i <= 125; i++) {
+      lines.push(`### B${String(i).padStart(3, "0")} 条目 ${i}`);
+    }
+    await writeReview(`${lines.join("\n")}\n`);
+    const pm = await signIn(app, "pm");
+
+    // Stable table headers even when zero entries exist, and group-nav retains progress bar in pending view
+    const page1 = await (await app.request("/", { headers: { Cookie: pm } })).text();
+    assert.match(page1, /<th class="table__column col-num">记录<\/th>/);
+    assert.match(page1, /<th class="table__column col-time">最近更新<\/th>/);
+    assert.match(page1, /<td class="table__cell col-num">\s*—\s*<\/td>/);
+    assert.match(page1, /group-nav__badge[^>]*>待 125<\/span\s*>/);
+    assert.match(page1, /class="group-nav__count"[^>]*>0\/125<\/span\s*>/);
+    assert.match(page1, /第 1–50 条，共 125 条/);
+    assert.match(page1, /href="\/items\/B001\?status=pending"/);
+    assert.doesNotMatch(page1, /href="\/items\/B051\?status=pending"/);
+    assert.match(page1, /accesskey="q"/);
+    assert.match(page1, /accesskey="n"/);
+    assert.match(page1, /href="\/export\.md"\s+title="[^"]*不受当前筛选影响/);
+
+    // Switching to page 2 carries page=2 to detail links and breadcrumb return links
+    const page2 = await (
+      await app.request("/?status=all&page=2", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(page2, /第 51–100 条，共 125 条/);
+    assert.match(page2, /href="\/items\/B051\?status=all&amp;page=2"/);
+    assert.doesNotMatch(page2, /href="\/items\/B001\?status=all/);
+    // Filter links (status tabs & group nav) reset back to page 1 (omit page=2)
+    assert.match(page2, /href="\/\?status=open"/);
+    assert.doesNotMatch(page2, /href="\/\?status=open&amp;page=2"/);
+
+    // Detail breadcrumbs preserve page=2 back to the list
+    const detailFromPage2 = await (
+      await app.request("/items/B051?status=all&page=2", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(detailFromPage2, /href="\/\?status=all&amp;page=2"/);
+    assert.match(detailFromPage2, /accesskey="p"/);
+    assert.match(detailFromPage2, /accesskey="n"/);
+    assert.match(detailFromPage2, /accesskey="s"/);
+
+    // Boundary page numbers: invalid/zero falls back to 1 keeping other filters; overflow clamps to last page
+    const invalidPage = await (
+      await app.request("/?status=all&page=abc", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(invalidPage, /第 1–50 条，共 125 条/);
+    assert.match(invalidPage, /href="\/items\/B001\?status=all"/);
+
+    const zeroPage = await (
+      await app.request("/?status=all&page=0", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(zeroPage, /第 1–50 条，共 125 条/);
+
+    const overflowPage = await (
+      await app.request("/?status=all&page=999", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(overflowPage, /第 101–125 条，共 125 条/);
+    assert.match(overflowPage, /href="\/items\/B125\?status=all&amp;page=3"/);
+  });
+});
+
+test("detail scaffolding supports permanent initial panel, prefill=1, 409 latest summary, role chips, and deduplicated single history", async () => {
+  await withSite(async ({ app }) => {
+    const pm = await signIn(app, "pm");
+    const dev = await signIn(app, "dev");
+
+    // Initial clarification panel is a permanent <section> (no <details>), with Markdown hint & mobile jump links
+    const initialPage = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    assert.match(
+      initialPage,
+      /<section id="clarify" class="card card--default card--padded">\s*<h2 class="section-title">提交澄清<\/h2>/,
+    );
+    assert.match(initialPage, /支持 Markdown 与 <code>文件:行号<\/code>/);
+    assert.match(initialPage, /class="mobile-jump"[\s\S]*href="#clarify"[\s\S]*href="#comment"/);
+
+    const a1 = await formValues(app, pm, "A1");
+    await post(app, pm, "/items/A1/clarifications", {
+      body: "已定稿：输错 5 次锁定 15 分钟。",
+      digest: a1.digest,
+      base: "0",
+    });
+
+    // After 1 clarification: conclusion & history carry role chip; default textarea stays empty; single history avoids repeating full prose
+    const clarified = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    assert.match(
+      clarified,
+      /class="conclusion__meta"[\s\S]*?chip--role"[^>]*>\s*产品\s*<\/span\s*>/,
+    );
+    assert.match(clarified, /class="entry__meta"[\s\S]*?chip--role"[^>]*>\s*产品\s*<\/span\s*>/);
+    assert.match(
+      clarified,
+      /仅此 1 条澄清记录，完整正文见「<a href="#current-clarification">当前澄清<\/a>」/,
+    );
+    assert.doesNotMatch(clarified, /已定稿：输错 5 次锁定 15 分钟。<\/textarea>/);
+    assert.match(
+      clarified,
+      /href="\/items\/A1\?status=pending&amp;prefill=1#clarify"[^>]*>载入上一版正文/,
+    );
+
+    // ?prefill=1 opens update <details> and loads previous clarification body
+    const prefilled = await (
+      await app.request("/items/A1?status=pending&prefill=1", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(prefilled, /<details[^>]*id="clarify"[^>]*\sopen\s*>/);
+    assert.match(prefilled, />\s*已定稿：输错 5 次锁定 15 分钟。<\/textarea>/);
+
+    // 409 conflict includes latest clarification excerpt inside the danger alert and preserves draft
+    const conflict = await post(app, pm, "/items/A1/clarifications", {
+      body: "我的并发草稿",
+      digest: a1.digest,
+      base: "0",
+    });
+    assert.equal(conflict.status, 409);
+    const conflictHtml = await conflict.text();
+    assert.match(conflictHtml, /class="conflict-latest__label">\s*产品（产品）的最新澄清摘要：/);
+    assert.match(
+      conflictHtml,
+      /class="prose conflict-latest__body">[\s\S]*已定稿：输错 5 次锁定 15 分钟。/,
+    );
+    assert.match(conflictHtml, /我的并发草稿<\/textarea>/);
+
+    // Engineer comment adds role chip and opens history with full prose
+    await post(app, dev, "/items/A1/comments", { body: "需发短信通知吗？", digest: a1.digest });
+    const withComment = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    assert.match(withComment, /class="entry__meta"[\s\S]*?chip--role"[^>]*>\s*工程\s*<\/span\s*>/);
+    assert.doesNotMatch(withComment, /仅此 1 条澄清记录/);
+  });
+});
