@@ -43,7 +43,7 @@ export function renderExport(input: ExportInput): string {
   const out: string[] = [
     `# ${input.title} 澄清记录`,
     "",
-    `> 根据 ${input.sources.map((source) => `\`${source}\``).join("、")} 与澄清数据库生成，生成时间 ${formatTime(input.generatedAt.toISOString())}。条目内容以审核文档为准；本文件记录产品方的澄清与讨论。`,
+    `> 本文件依据审核文档（${input.sources.map((source) => `\`${source}\``).join("、")}）与系统记录生成，导出时间：${formatTime(input.generatedAt.toISOString())}。条目描述以审核文档为准，以下汇总各方澄清结论与讨论历史。`,
     "",
     "## 汇总",
     "",
@@ -66,7 +66,7 @@ export function renderExport(input: ExportInput): string {
       "",
       `## ${group.title}`,
       "",
-      "| 条目 | 标题 | 状态 | 当前澄清 | 澄清人 / 时间 |",
+      "| 编号 | 标题 | 状态 | 当前澄清 | 澄清人 / 时间 |",
       "| --- | --- | --- | --- | --- |",
     );
     for (const item of items) {
@@ -87,7 +87,7 @@ export function renderExport(input: ExportInput): string {
       if (!history) continue;
       out.push("", `### ${item.id} ${item.title.replace(/\r?\n/g, " ")}`, "");
       for (const entry of history) {
-        const stale = entry.itemDigest === item.digest ? "" : "（基于旧版条目）";
+        const stale = entry.itemDigest === item.digest ? "" : "（基于历史版本）";
         const quoted = entry.body.split(/\r?\n/).map((line) => `  > ${line}`);
         out.push(
           `- ${formatTime(entry.createdAt)} ${entry.author.displayName} ${ENTRY_LABELS[entry.kind]}${stale}：`,

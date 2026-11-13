@@ -100,14 +100,14 @@ type ListFilter = Omit<z.infer<typeof ListQuery>, "page"> & { page?: number };
 const FILTER_KEYS = ["group", "status", "severity", "q"] as const;
 
 const STATUS_DESCRIPTIONS: Record<ListStatus, string> = {
-  pending: "未澄清、需复核与待回复的条目",
-  all: "审核文档中的全部条目",
-  open: "尚未提交任何澄清",
-  stale: "澄清后条目内容有更新，需重新确认",
-  awaiting: "最近一次澄清后又有新评论/追问",
-  clarified: "已基于当前条目内容完成澄清",
+  pending: "汇总所有未澄清、需复核及待回复条目",
+  all: "按审核文档原始顺序展示全部条目",
+  open: "尚未提交澄清结论",
+  stale: "澄清后条目内容已发生变更，须重新核对",
+  awaiting: "存在未通过新澄清回复的评论或追问",
+  clarified: "已依据当前条目内容完成澄清",
 };
-const Body = z.string().trim().min(1, "内容不能为空").max(5000, "内容不超过 5000 字");
+const Body = z.string().trim().min(1, "内容不能为空").max(5000, "内容长度不可超过 5000 字");
 /** `base` (the latest clarification the author saw) is required for clarifications only. */
 const EntryForm = z.object({
   body: Body,
@@ -185,7 +185,7 @@ function hasActiveFilter(filter: ListFilter, user: User): boolean {
     filter.group ||
     filter.severity ||
     filter.q ||
-    (filter.status && filter.status !== defaultStatus(user)),
+    (filter.status && filter.status !== defaultStatus(user) && filter.status !== "all"),
   );
 }
 
@@ -319,7 +319,7 @@ export function createApp(options: AppOptions) {
                   html`<a
                     class="excerpt__diff"
                     href="${`/docs/view?${new URLSearchParams({ path: baseDoc?.path ?? excerpt.path, rev: rev.id, mode: "diff" })}`}"
-                    >查看 ${rev.label} 增量变动</a
+                    >查看 ${rev.label} 变更对比</a
                   >`,
               )}
             </div>
@@ -331,7 +331,7 @@ export function createApp(options: AppOptions) {
               return html`${
                   index
                     ? html`<a class="excerpt__gap" href="${gapHref}"
-                        >省略第 ${omittedFrom}–${window.start - 1} 行，在文档中查看</a
+                        >已省略第 ${omittedFrom}–${window.start - 1} 行（查看完整上下文）</a
                       >`
                     : ""
                 }
@@ -405,12 +405,12 @@ export function createApp(options: AppOptions) {
       return message(
         c,
         503,
-        "审核文档无法读取",
-        `${error.message}。修复后刷新页面即可恢复；在此之前暂停查看与提交。`,
+        "文档读取失败，服务暂不可用",
+        `错误详情：${error.message}。请修复对应文档后刷新页面；为保证数据一致性，恢复前全站暂停浏览与提交。`,
       );
     }
     console.error(error);
-    return c.text("服务器内部错误", 500);
+    return c.text("服务异常，请稍后重试或联系管理员。", 500);
   });
 
   for (const sheet of STYLESHEETS) {
@@ -434,7 +434,6 @@ export function createApp(options: AppOptions) {
           class="card card--default card--padded form narrow login-card"
         >
           <div class="login-head">
-            <p class="login-head__site">${config.title}</p>
             <h1>登录</h1>
           </div>
           ${error ? alert("danger", error) : ""}
@@ -460,7 +459,7 @@ export function createApp(options: AppOptions) {
             />
           </label>
           <button class="button button--primary button--full-width" type="submit">登录</button>
-          <p class="field__hint">账号由管理员创建；忘记密码请联系管理员重置。</p>
+          <p class="field__hint">账号由管理员统一分配；如遗忘密码，请联系管理员重置。</p>
         </form>`,
       ),
       error ? 401 : 200,
@@ -472,13 +471,18 @@ export function createApp(options: AppOptions) {
     const submitted = await c.req.parseBody();
     const next = safeNext(text(submitted, "next"));
     const parsed = LoginForm.safeParse(submitted);
-    if (!parsed.success) return loginPage(c, next, "请输入用户名和密码");
+    if (!parsed.success) return loginPage(c, next, "请填写用户名与密码。");
     const { username, password } = parsed.data;
     const key = username.toLowerCase();
     const now = Date.now();
     const failures = loginFailures.get(key);
     if (failures && failures.lockedUntil > now) {
-      return loginPage(c, next, "登录失败次数过多，请 15 分钟后再试", username);
+      return loginPage(
+        c,
+        next,
+        "连续登录失败次数过多，账号已临时锁定，请于 15 分钟后重试。",
+        username,
+      );
     }
     const user = await users.byUsername(username);
     const valid = await verifyPassword(password, user?.passwordHash ?? (await dummyHash));
@@ -488,7 +492,7 @@ export function createApp(options: AppOptions) {
         count: count >= MAX_LOGIN_FAILURES ? 0 : count,
         lockedUntil: count >= MAX_LOGIN_FAILURES ? now + LOGIN_LOCK_MS : 0,
       });
-      return loginPage(c, next, "用户名或密码错误，或账号已停用", username);
+      return loginPage(c, next, "用户名、密码有误，或该账号已被停用。", username);
     }
     loginFailures.delete(key);
     const token = newSessionToken();
@@ -539,7 +543,7 @@ export function createApp(options: AppOptions) {
             <dd>${user.displayName}</dd>
             <dt>角色</dt>
             <dd>
-              ${ROLE_LABELS[user.role]}${canClarify(user.role) ? "（可提交澄清）" : "（可评论、追问）"}
+              ${ROLE_LABELS[user.role]}${canClarify(user.role) ? "（权限：提交澄清、发表评论）" : "（权限：仅发表评论与追问）"}
             </dd>
           </dl>
           <form method="post" action="/account/password" class="form">
@@ -566,7 +570,8 @@ export function createApp(options: AppOptions) {
                 autocomplete="new-password"
               />
               <span class="field__hint"
-                >至少 ${MIN_PASSWORD_LENGTH} 位。修改后，其他设备上的登录会失效。</span
+                >密码长度不少于 ${MIN_PASSWORD_LENGTH}
+                位；修改密码后，其他已登录设备的会话将自动注销。</span
               >
             </label>
             <label class="field">
@@ -588,7 +593,7 @@ export function createApp(options: AppOptions) {
   };
 
   app.get("/account", (c) =>
-    accountPage(c, c.req.query("changed") ? alert("success", "密码已修改") : undefined),
+    accountPage(c, c.req.query("changed") ? alert("success", "密码已更新") : undefined),
   );
 
   app.post("/account/password", async (c) => {
@@ -649,14 +654,35 @@ export function createApp(options: AppOptions) {
     );
     const clarified = (list: ReviewItem[]) =>
       list.filter((item) => state(item).status === "clarified").length;
+    const clarifiedAwaiting = (list: ReviewItem[]) =>
+      list.filter((item) => state(item).status === "clarified" && state(item).awaitingReply).length;
 
     const groupLink = (group: ReviewGroup | undefined) => {
       const groupItems = group ? review.items.filter((item) => item.group === group) : review.items;
       const done = clarified(groupItems);
+      const awaitingClarified = clarifiedAwaiting(groupItems);
+      const unresolvedCount = groupItems.filter((item) => {
+        const currentStatus = state(item).status;
+        return currentStatus === "open" || currentStatus === "stale";
+      }).length;
       const pendingCount = groupItems.filter((item) =>
         matchesFilter(item, state(item), { status: "pending" }),
       ).length;
       const current = group?.key === filter.group;
+      const badgeClass =
+        pendingCount === 0
+          ? "group-nav__badge is-zero"
+          : unresolvedCount === 0
+            ? "group-nav__badge group-nav__badge--accent"
+            : "group-nav__badge";
+      const badgeLabel =
+        pendingCount > 0 && unresolvedCount === 0
+          ? `待回复 ${pendingCount}`
+          : `待办 ${pendingCount}`;
+      const badgeTitle =
+        pendingCount > 0 && unresolvedCount === 0
+          ? "已提交澄清，尚有新评论或追问待回复"
+          : "该分组待处理条目数（含未澄清、需复核及待回复）";
       return html`<a
         class="group-nav__link"
         href="/${filterSearch(filter, { group: group?.key, page: undefined })}"
@@ -666,18 +692,14 @@ export function createApp(options: AppOptions) {
         <span class="group-nav__counts">
           ${
             filter.status === "pending"
-              ? html`<span
-                  class="group-nav__badge${pendingCount ? "" : " is-zero"}"
-                  title="待处理条目数"
-                  >待 ${pendingCount}</span
-                >`
+              ? html`<span class="${badgeClass}" title="${badgeTitle}">${badgeLabel}</span>`
               : ""
           }
           <span class="group-nav__count" title="已澄清 / 总条目数"
             >${done}/${groupItems.length}</span
           >
         </span>
-        ${progressBar(done, groupItems.length)}
+        ${progressBar(done, groupItems.length, undefined, awaitingClarified)}
       </a>`;
     };
 
@@ -711,7 +733,7 @@ export function createApp(options: AppOptions) {
       ? html`<select class="input" name="severity" aria-label="严重度">
           ${option("", "全部严重度", filter.severity)}
           ${severityOptions.map((value) => option(value, value, filter.severity))}
-          ${presentSeverities.has(undefined) ? option(NO_SEVERITY, "无严重度", filter.severity) : ""}
+          ${presentSeverities.has(undefined) ? option(NO_SEVERITY, "未标注严重度", filter.severity) : ""}
         </select>`
       : "";
 
@@ -735,7 +757,7 @@ export function createApp(options: AppOptions) {
                   <th class="table__column">条目</th>
                   <th class="table__column col-chip">严重度</th>
                   <th class="table__column col-status">状态</th>
-                  <th class="table__column col-num">记录</th>
+                  <th class="table__column col-num">记录数</th>
                   <th class="table__column col-time">最近更新</th>
                 </tr>
               </thead>
@@ -779,10 +801,10 @@ export function createApp(options: AppOptions) {
           </div>
         </div>`
       : activeFilter
-        ? emptyState("没有符合条件的条目。", { href: "/", label: "清除筛选" })
+        ? emptyState("未检索到符合当前筛选条件的条目", { href: "/", label: "清除筛选" })
         : review.items.length
-          ? emptyState("当前没有待处理的条目。", { href: "/?status=all", label: "查看全部条目" })
-          : emptyState("审核文档中暂无条目。");
+          ? emptyState("当前暂无待处理条目", { href: "/?status=all", label: "查看全部条目" })
+          : emptyState("审核文档中尚未包含任何条目");
 
     return c.html(
       page(
@@ -793,18 +815,18 @@ export function createApp(options: AppOptions) {
             <div>
               <h1>澄清条目</h1>
               <p class="muted">
-                条目来自
+                数据来源：
                 ${reviews.map(
                   (doc, index) =>
                     html`${index ? "、" : ""}<a href="${docHref(doc.path)}"
                         >${documentLabel(workspace, doc.path)}</a
                       >`,
-                )}。点击条目查看原文位置、提交澄清或参与讨论。
+                )}。选择任意条目即可核对源文档原文、提交澄清结论或发表追问。
               </p>
             </div>
             <div class="overall">
-              ${filter.status === "pending" && items[0] ? html`<a class="button button--primary button--sm" href="/items/${encodeURIComponent(items[0].id)}${itemSearch}">从第一条开始处理</a>` : ""}
-              ${progressBar(clarified(review.items), review.items.length, "已澄清")}
+              ${progressBar(clarified(review.items), review.items.length, "已澄清", clarifiedAwaiting(review.items))}
+              ${filter.status === "pending" && items[0] ? html`<a class="button button--primary button--sm" href="/items/${encodeURIComponent(items[0].id)}${itemSearch}">开始连续处理</a>` : ""}
             </div>
           </div>
           ${(() => {
@@ -820,7 +842,7 @@ export function createApp(options: AppOptions) {
             ).length;
             const groupNavInner = html`${
               filter.status === "pending"
-                ? html`<div class="group-nav__section">分组 · 待处理 / 已澄清</div>`
+                ? html`<div class="group-nav__section">文档分组（待处理 / 已澄清）</div>`
                 : ""
             }
             ${groupLink(undefined)}
@@ -836,10 +858,10 @@ export function createApp(options: AppOptions) {
             const listFooter = totalItems
               ? html`<div class="list-footer">
                   <span class="list-footer__range"
-                    >第 ${displayStart}–${displayEnd} 条，共 ${totalItems} 条<span
+                    >当前显示第 ${displayStart}–${displayEnd} 条，共 ${totalItems} 条<span
                       class="list-footer__export"
                     >
-                      · 顶栏「导出记录」导出全部 ${review.items.length} 条</span
+                      · 通过顶栏「导出记录」可导出全部 ${review.items.length} 条</span
                     ></span
                   >
                   ${
@@ -851,7 +873,7 @@ export function createApp(options: AppOptions) {
                                   class="button button--secondary button--sm"
                                   href="${pageHref(currentPage - 1)}"
                                   accesskey="p"
-                                  title="上一页（accesskey: p）"
+                                  title="上一页（快捷键 P）"
                                   >‹ 上一页</a
                                 >`
                               : html`<span
@@ -880,7 +902,7 @@ export function createApp(options: AppOptions) {
                                   class="button button--secondary button--sm"
                                   href="${pageHref(currentPage + 1)}"
                                   accesskey="n"
-                                  title="下一页（accesskey: n）"
+                                  title="下一页（快捷键 N）"
                                   >下一页 ›</a
                                 >`
                               : html`<span
@@ -905,7 +927,7 @@ export function createApp(options: AppOptions) {
                 <summary class="group-nav-mobile__summary">
                   <span>分组：${activeGroup ? activeGroup.label : "全部条目"}</span>
                   <span class="group-nav-mobile__meta">
-                    ${filter.status === "pending" ? `待 ${activePending} · ` : ""}${activeDone}/${activeGroupItems.length}
+                    ${filter.status === "pending" ? `待办 ${activePending} · ` : ""}${activeDone}/${activeGroupItems.length}
                   </span>
                 </summary>
                 <nav class="group-nav-mobile__list" aria-label="分组">${groupNavInner}</nav>
@@ -913,12 +935,20 @@ export function createApp(options: AppOptions) {
               <section>
                 <div class="status-bar">
                   <nav class="status-tabs" aria-label="状态">
-                    <span class="status-tabs__group" role="group" aria-label="视图">
+                    <span
+                      class="status-tabs__group status-tabs__group--views"
+                      role="group"
+                      aria-label="视图"
+                    >
                       ${statusTab("pending", LIST_STATUS_LABELS.pending)}
                       ${statusTab("all", LIST_STATUS_LABELS.all)}
                     </span>
                     <span class="status-tabs__sep" aria-hidden="true"></span>
-                    <span class="status-tabs__group" role="group" aria-label="状态分布">
+                    <span
+                      class="status-tabs__group status-tabs__group--states"
+                      role="group"
+                      aria-label="状态分布"
+                    >
                       ${statusTab("open", LIST_STATUS_LABELS.open)}
                       ${statusTab("stale", LIST_STATUS_LABELS.stale)}
                       ${statusTab("awaiting", LIST_STATUS_LABELS.awaiting)}
@@ -928,14 +958,21 @@ export function createApp(options: AppOptions) {
                   ${
                     filter.status === "pending"
                       ? html`<p class="status-hint muted">
-                          需我处理 = 未澄清 + 需复核 +
-                          待回复（按严重度排序）；右上角仅统计已澄清进度。
+                          汇总未澄清、需复核及待回复条目，按严重度降序排列；进度条绿色代表已澄清，蓝色代表待回复。
                         </p>`
                       : filter.status === "awaiting"
                         ? html`<p class="status-hint muted">
-                            状态分布：仅显示最近一次澄清后又有新评论 / 追问的条目。
+                            当前仅展示存在未回复评论或追问的条目（含尚未澄清但已收到评论的条目）。
                           </p>`
-                        : ""
+                        : filter.status === "stale"
+                          ? html`<p class="status-hint muted">
+                              条目内容在最近一次澄清后已修订，请重新核对并确认澄清结论。
+                            </p>`
+                          : filter.status === "clarified"
+                            ? html`<p class="status-hint muted">
+                                已基于最新条目内容完成澄清；如同时标注「待回复」，表示此后仍有新追问。
+                              </p>`
+                            : ""
                   }
                 </div>
                 <form class="filter-bar" method="get" action="/" role="search">
@@ -950,7 +987,7 @@ export function createApp(options: AppOptions) {
                     placeholder="搜索编号或关键词"
                     aria-label="关键词"
                     accesskey="q"
-                    title="搜索编号或关键词（accesskey: q）"
+                    title="搜索编号或关键词（快捷键 Q）"
                   />
                   <button class="button button--primary" type="submit">筛选</button>
                   ${activeFilter ? html`<a class="button button--ghost" href="/">清除筛选</a>` : ""}
@@ -958,7 +995,7 @@ export function createApp(options: AppOptions) {
                     >${
                       totalItems === review.items.length
                         ? `共 ${totalItems} 条`
-                        : `筛选结果 ${totalItems} / ${review.items.length} 条`
+                        : `已筛选 ${totalItems} / ${review.items.length} 条`
                     }</span
                   >
                 </form>
@@ -986,7 +1023,7 @@ export function createApp(options: AppOptions) {
     const index = items.findIndex((candidate) => candidate.id === id);
     const item = items[index];
     if (!item) {
-      return message(c, 404, "未找到条目", `审核文档中没有编号为 ${id} 的条目。`, {
+      return message(c, 404, "未找到指定条目", `审核文档中不存在编号为「${id}」的条目。`, {
         href: "/",
         label: "返回列表",
       });
@@ -1045,8 +1082,8 @@ export function createApp(options: AppOptions) {
             class="button button--tertiary button--sm"
             href="${itemHref(target.id)}"
             accesskey="${shortcut}"
-            title="${shortcutTitle}（accesskey: ${shortcut}）"
-            >${label}</a
+            title="${shortcutTitle}（快捷键 ${shortcut.toUpperCase()}）"
+            >${label} <kbd class="kbd" aria-hidden="true">${shortcut.toUpperCase()}</kbd></a
           >`
         : html`<span class="button button--tertiary button--sm" aria-disabled="true"
             >${label}</span
@@ -1059,8 +1096,13 @@ export function createApp(options: AppOptions) {
           >`,
       );
 
-    const singleClarificationOnly =
-      history.length === 1 && Boolean(clarification) && history[0]?.id === clarification?.id;
+    const isCurrentClarification = (entry: Entry) => entry.id === clarification?.id;
+    const clarifyOpen =
+      !clarification ||
+      form?.kind === "clarification" ||
+      status === "stale" ||
+      awaitingReply ||
+      prefill;
 
     const entryView = (entry: Entry) =>
       html`<li id="entry-${entry.id}" class="entry entry--${entry.kind}">
@@ -1078,12 +1120,15 @@ export function createApp(options: AppOptions) {
             >
             <span class="muted">${ENTRY_LABELS[entry.kind]}</span>
             <span class="muted">${formatTime(entry.createdAt)}</span>
-            ${entry.itemDigest !== item.digest ? staleChip("基于旧版条目") : ""}
+            ${entry.itemDigest !== item.digest ? staleChip("基于历史版本") : ""}
           </div>
           ${
-            singleClarificationOnly
+            isCurrentClarification(entry)
               ? html`<p class="muted entry__deduped">
-                  仅此 1 条澄清记录，完整正文见「<a href="#current-clarification">当前澄清</a>」。
+                  ${history.length === 1 ? "此为当前唯一澄清记录，" : "此为当前生效澄清，"}完整内容见「<a
+                    href="#current-clarification"
+                    >当前澄清</a
+                  >」。
                 </p>`
               : html`<div class="prose entry__body">${raw(entryMd.render(entry.body, env))}</div>`
           }
@@ -1092,12 +1137,13 @@ export function createApp(options: AppOptions) {
 
     const errorFor = (kind: FormState["kind"]) => {
       if (form?.kind !== kind) return "";
+      const errorTitle = httpStatus === 409 ? "提交失败：存在版本冲突" : "表单校验未通过";
       if (kind === "clarification" && form.conflictLatest) {
         const latest = form.conflictLatest;
         const excerpt = latest.body.length > 280 ? `${latest.body.slice(0, 280)}…` : latest.body;
         return alert(
           "danger",
-          "提交未成功",
+          errorTitle,
           html`<p>${form.error}</p>
             <div class="conflict-latest">
               <div class="conflict-latest__label">
@@ -1107,7 +1153,7 @@ export function createApp(options: AppOptions) {
             </div>`,
         );
       }
-      return alert("danger", "提交未成功", form.error);
+      return alert("danger", errorTitle, form.error);
     };
     const valueFor = (kind: FormState["kind"]) => {
       if (form?.kind === kind) return form.body;
@@ -1131,9 +1177,12 @@ export function createApp(options: AppOptions) {
             clarification
               ? prefill && form?.kind !== "clarification"
                 ? html`<span class="field__hint"
-                    >已载入上一版 · <a href="${itemHref(item.id)}#clarify">清空</a></span
+                    >已引用上一版正文 · <a href="${itemHref(item.id)}#clarify">重置</a></span
                   >`
-                : html`<a class="button button--tertiary button--sm" href="${prefillHref}"
+                : html`<a
+                    class="button button--tertiary button--sm"
+                    href="${prefillHref}"
+                    title="此操作将重新加载页面并填充上一版正文，当前未提交的草稿将被覆盖"
                     >载入上一版正文</a
                   >`
               : ""
@@ -1146,16 +1195,22 @@ export function createApp(options: AppOptions) {
           rows="7"
           required
           maxlength="5000"
-          placeholder="写明结论、依据，以及需要回写到哪份文档"
+          accesskey="c"
+          placeholder="请填写澄清结论、决策依据及待修订的文档位置"
         >
 ${valueFor("clarification")}</textarea>
         <span class="field__hint">
           ${
             status === "stale"
-              ? "审核文档已修改，请对照上方「当前澄清」调整后重新提交。"
-              : `以 ${user.displayName} 的名义提交，记录只追加。`
+              ? "条目内容已更新，请对照上方「当前澄清」核对后重新提交。"
+              : `当前操作人：${user.displayName}（历史记录永久留存，如需更正请再次提交）。`
           }支持
-          Markdown 与 <code>文件:行号</code> 自动链接。
+          Markdown 语法及
+          <code>文件:行号</code> 自动链接（示例：<code>:7</code>、<code>:7–8</code>）；快捷键：<code
+            >C</code
+          >
+          聚焦输入框，<code>S</code> 提交并进入下一条，<code>P</code> /
+          <code>N</code> 切换上、下一条。
         </span>
       </div>
       ${
@@ -1167,9 +1222,10 @@ ${valueFor("clarification")}</textarea>
                 name="after"
                 value="next"
                 accesskey="s"
-                title="${clarification ? "更新澄清并进入下一条" : "提交澄清并进入下一条"}（accesskey: s）"
+                title="${clarification ? "更新澄清并进入下一条" : "提交澄清并进入下一条"}（快捷键 S）"
               >
                 ${clarification ? "更新并下一条" : "提交并下一条"}
+                <kbd class="kbd" aria-hidden="true">S</kbd>
               </button>
               <button
                 class="button button--secondary button--sm clarify-actions__stay"
@@ -1189,7 +1245,7 @@ ${valueFor("clarification")}</textarea>
         ? html`<details
             id="clarify"
             class="card card--default card--padded"
-            ${form?.kind === "clarification" || status === "stale" || prefill ? "open" : ""}
+            ${clarifyOpen ? "open" : ""}
           >
             <summary class="section-title">更新澄清</summary>
             ${clarifyFormInner}
@@ -1199,14 +1255,24 @@ ${valueFor("clarification")}</textarea>
             ${clarifyFormInner}
           </section>`
       : html`<section class="card card--default card--padded">
-          <p class="readonly-note">澄清由产品方提交。对条目或澄清有疑问，请在评论中追问。</p>
+          <p class="readonly-note">
+            当前账号仅具备评论与追问权限，澄清结论须由产品或管理员提交。如需确认细节，请在「评论 /
+            追问」区发起讨论。
+          </p>
         </section>`;
 
-    const body = html`<div class="detail-top">
-        <nav class="breadcrumbs" aria-label="位置">
+    const body = html`${
+        canClarify(user.role) && clarifyOpen
+          ? html`<a class="skip-link" href="#clarify-body">跳至澄清输入框</a>`
+          : !canClarify(user.role)
+            ? html`<a class="skip-link" href="#comment-body">跳至评论输入框</a>`
+            : ""
+      }
+      <div class="detail-top">
+        <nav class="breadcrumbs" aria-label="面包屑导航">
           <span class="breadcrumbs__item"
             ><a class="breadcrumbs__link" href="/${search}"
-              >${hasActiveFilter(filter, user) ? "澄清条目（筛选结果）" : "澄清条目"}</a
+              >${hasActiveFilter(filter, user) ? "澄清条目（筛选结果）" : filter.status === "all" && defaultStatus(user) !== "all" ? "澄清条目（全部）" : "澄清条目"}</a
             ></span
           >
           <span class="breadcrumbs__separator" aria-hidden="true">/</span>
@@ -1221,7 +1287,7 @@ ${valueFor("clarification")}</textarea>
         <nav class="pager" aria-label="翻页">
           ${pagerButton(previous, "‹ 上一条", "p", "上一条")}
           <span class="pager__position">
-            ${position >= 0 ? `${position + 1} / ${matching.length}` : `不在筛选结果中（共 ${matching.length} 条）`}
+            ${position >= 0 ? `${position + 1} / ${matching.length}` : `不在当前筛选范围内（共 ${matching.length} 条）`}
           </span>
           ${pagerButton(next, "下一条 ›", "n", "下一条")}
         </nav>
@@ -1240,9 +1306,13 @@ ${valueFor("clarification")}</textarea>
       <div class="mobile-jump">
         ${
           canClarify(user.role)
-            ? html`<a class="button button--primary button--sm" href="#clarify"
-                >${clarification ? "更新澄清 ↓" : "提交澄清 ↓"}</a
-              >`
+            ? clarifyOpen
+              ? html`<a class="button button--primary button--sm" href="#clarify"
+                  >${clarification ? "更新澄清 ↓" : "提交澄清 ↓"}</a
+                >`
+              : html`<a class="button button--secondary button--sm" href="#current-clarification"
+                  >当前澄清 ↓</a
+                >`
             : ""
         }
         <a class="button button--secondary button--sm" href="#comment">评论 / 追问 ↓</a>
@@ -1252,17 +1322,19 @@ ${valueFor("clarification")}</textarea>
         status === "stale"
           ? alert(
               "danger",
-              "本条目在最近一次澄清后已修改",
-              canClarify(user.role) && clarification
-                ? html`请核对审核文档的最新内容，确认澄清是否仍然成立并重新提交。<a
-                      href="${prefillHref}"
-                      >载入上一版正文对照修改</a
-                    >`
-                : "请核对审核文档的最新内容，确认澄清是否仍然成立并重新提交。",
+              "条目内容已变更，当前澄清需复核",
+              canClarify(user.role)
+                ? clarification
+                  ? html`审核文档中的条目内容已发生更新，请核对最新描述后重新确认并提交澄清（可点击「<a
+                        href="${prefillHref}"
+                        >载入上一版正文</a
+                      >」对照修订）。`
+                  : "审核文档中的条目内容已发生更新，请核对最新描述后重新确认并提交澄清。"
+                : "审核文档中的条目内容已更新，当前澄清基于历史版本；请待产品或管理员核对后重新确认。",
             )
           : ""
       }
-      ${showReceipt ? html`<div class="alert alert--success" role="status">澄清已保存。<a href="/items/${encodeURIComponent(receipt.previous)}${search}#entry-${receipt.entryId}">返回上一条查看记录</a>${receipt.previous === id ? "；当前筛选中没有下一条。" : ""}</div>` : ""}
+      ${showReceipt ? html`<div class="alert alert--success" role="status">${receipt.previous === id ? html`澄清结论已保存，当前筛选范围内已无后续条目（<a href="/items/${encodeURIComponent(receipt.previous)}${search}#entry-${receipt.entryId}">查看本次提交记录</a>）。` : html`澄清结论已保存，已跳转至下一条。<a href="/items/${encodeURIComponent(receipt.previous)}${search}#entry-${receipt.entryId}">返回上一条查看提交记录</a>`}</div>` : ""}
       <div class="detail-layout">
         <div class="detail-main">
           <section class="card card--default card--padded">
@@ -1293,36 +1365,35 @@ ${valueFor("clarification")}</textarea>
                 ? html`<ol class="timeline">
                     ${history.map(entryView)}
                   </ol>`
-                : html`<p class="muted">暂无记录。</p>`
+                : html`<p class="muted">暂无处理记录</p>`
             }
           </details>
-          <details
-            id="comment"
-            class="card card--default card--padded"
-            ${!canClarify(user.role) || form?.kind === "comment" ? "open" : ""}
-          >
-            <summary class="section-title">评论 / 追问</summary>
-            <form method="post" action="${action("comments")}" class="form composer">
+          <section id="comment" class="card card--default card--padded">
+            <h2 class="section-title">评论 / 追问</h2>
+            <form method="post" action="${action("comments")}" class="form">
               ${errorFor("comment")}
               <input type="hidden" name="digest" value="${item.digest}" />
               <textarea
+                id="comment-body"
                 class="textarea textarea--full-width"
                 name="body"
+                ${!canClarify(user.role) ? html`accesskey="c"` : ""}
                 rows="3"
                 required
                 maxlength="5000"
-                aria-label="内容"
-                placeholder="不改变澄清状态；产品方回复前，条目显示“待回复”"
+                aria-label="评论内容"
+                placeholder="发表评论或追问（仅记录讨论，不改变澄清状态；产品或管理员回复前条目将标记为「待回复」）"
               >
 ${valueFor("comment")}</textarea>
               <div class="form-actions">
-                <span class="field__hint"
-                  >以 ${user.displayName} 的名义发表 · 支持 Markdown 与 <code>文件:行号</code></span
-                >
-                <button class="button button--secondary" type="submit">发表</button>
+                <span class="field__hint">
+                  当前发言人：${user.displayName} · 支持 Markdown 语法与 <code>文件:行号</code>
+                  ${!canClarify(user.role) ? html`· 快捷键：<code>C</code> 聚焦输入框` : ""}
+                </span>
+                <button class="button button--secondary" type="submit">发表评论</button>
               </div>
             </form>
-          </details>
+          </section>
         </div>
         <aside class="detail-side">
           ${
@@ -1357,10 +1428,16 @@ ${valueFor("comment")}</textarea>
     const id = c.req.param("id") ?? "";
     const { user } = session(c);
     if (kind === "clarification" && !canClarify(user.role)) {
-      return message(c, 403, "无权提交澄清", "澄清由产品方提交；你可以在条目页发表评论或追问。", {
-        href: `/items/${encodeURIComponent(id)}`,
-        label: "返回条目",
-      });
+      return message(
+        c,
+        403,
+        "权限不足",
+        "仅产品或管理员角色可提交澄清结论；您可在条目详情页发表评论或追问。",
+        {
+          href: `/items/${encodeURIComponent(id)}`,
+          label: "返回条目",
+        },
+      );
     }
     const submitted = await c.req.parseBody();
     const fail = (error: string, status: 409 | 422, conflictLatest?: Entry) =>
@@ -1369,7 +1446,8 @@ ${valueFor("comment")}</textarea>
     if (!parsed.success)
       return fail(parsed.error.issues.map((issue) => issue.message).join("；"), 422);
     const form = parsed.data;
-    if (kind === "clarification" && form.base === undefined) return fail("缺少基准澄清编号", 422);
+    if (kind === "clarification" && form.base === undefined)
+      return fail("缺少基准澄清版本参数，请刷新页面后重试。", 422);
 
     const filter = parseFilter(c);
     const reviewItems = (await loadWorkspace(config)).review.items;
@@ -1379,7 +1457,10 @@ ${valueFor("comment")}</textarea>
     const item = items[index];
     if (!item) return renderItem(c, id);
     if (kind === "clarification" && form.digest !== item.digest) {
-      return fail("审核文档中的本条目已更新，请阅读最新内容后再提交澄清。你的内容已保留。", 409);
+      return fail(
+        "审核文档中的条目内容已发生变更，请核对最新内容后重新提交（当前输入内容已为您保留）。",
+        409,
+      );
     }
 
     const result = await entries.add({
@@ -1393,7 +1474,7 @@ ${valueFor("comment")}</textarea>
     if (!result.ok) {
       const { latest } = result;
       return fail(
-        `${latest.author.displayName}（${ROLE_LABELS[latest.author.role]}）已于 ${formatTime(latest.createdAt)} 提交了新的澄清，请阅读后再提交。你的内容已保留。`,
+        `${latest.author.displayName}（${ROLE_LABELS[latest.author.role]}）已于 ${formatTime(latest.createdAt)} 更新了澄清结论，请参考下方摘要后确认是否再次提交（当前输入内容已为您保留）。`,
         409,
         latest,
       );
@@ -1428,12 +1509,12 @@ ${valueFor("comment")}</textarea>
     return c.html(
       page(
         c,
-        "文档",
+        "项目文档",
         "docs",
         html`<div class="page-head">
             <div>
-              <h1>文档</h1>
-              <p class="muted">在站内阅读源文档与审核文档，左侧数字为源文件行号。</p>
+              <h1>项目文档</h1>
+              <p class="muted">汇集本项目全部源文档与审核文档，支持原文行号定位与版本变更对比。</p>
             </div>
           </div>
           <div class="doc-grid">
@@ -1484,13 +1565,13 @@ ${valueFor("comment")}</textarea>
       }
     }
     if (!doc)
-      return message(c, 404, "未找到文档", "没有这份文档。", {
+      return message(c, 404, "未找到指定文档", "项目配置中未包含该文档路径。", {
         href: "/docs",
         label: "返回文档列表",
       });
     const modeParam = c.req.query("mode");
     if (modeParam !== undefined && modeParam !== "rendered" && modeParam !== "diff") {
-      return message(c, 404, "无效的视图模式", "不支持该视图模式。", {
+      return message(c, 404, "视图参数无效", "不支持所请求的文档视图模式。", {
         href: docHref(doc.path),
         label: "查看文档",
       });
@@ -1500,10 +1581,16 @@ ${valueFor("comment")}</textarea>
       ? config.revisions.find((rev) => rev.id === effectiveRevId)
       : undefined;
     if (effectiveRevId && !activeRevConfig) {
-      return message(c, 404, "未找到文档版本", `没有编号为 ${effectiveRevId} 的修订版。`, {
-        href: docHref(doc.path),
-        label: "查看基线版本",
-      });
+      return message(
+        c,
+        404,
+        "未找到修订版本",
+        `项目中不存在标识为「${effectiveRevId}」的修订版本。`,
+        {
+          href: docHref(doc.path),
+          label: "查看基线版本",
+        },
+      );
     }
     const mode = activeRevConfig && modeParam === "diff" ? "diff" : "rendered";
     const revs = doc.revisions ?? [];
@@ -1577,19 +1664,19 @@ ${valueFor("comment")}</textarea>
         activeRevConfig ? `${doc.title}（${activeRevConfig.label}）` : doc.title,
         "docs",
         html`<div class="docs-layout">
-          <nav class="card card--default group-nav group-nav--desktop" aria-label="文档">
+          <nav class="card card--default group-nav group-nav--desktop" aria-label="项目文档列表">
             ${docNavLinks}
           </nav>
           <details class="card card--default group-nav-mobile">
             <summary class="group-nav-mobile__summary">
-              <span>文档：${documentLabel(workspace, doc.path)}</span>
+              <span>当前文档：${documentLabel(workspace, doc.path)}</span>
             </summary>
-            <nav class="group-nav-mobile__list" aria-label="文档">${docNavLinks}</nav>
+            <nav class="group-nav-mobile__list" aria-label="项目文档列表">${docNavLinks}</nav>
           </details>
           <div class="card card--default doc-card">
-            <nav class="breadcrumbs" aria-label="位置">
+            <nav class="breadcrumbs" aria-label="面包屑导航">
               <span class="breadcrumbs__item"
-                ><a class="breadcrumbs__link" href="/docs">文档</a></span
+                ><a class="breadcrumbs__link" href="/docs">项目文档</a></span
               >
               <span class="breadcrumbs__separator" aria-hidden="true">/</span>
               <span class="breadcrumbs__item muted">${documentLabel(workspace, doc.path)}</span>
@@ -1615,7 +1702,7 @@ ${valueFor("comment")}</textarea>
                           class="rev-tabs__link"
                           href="${revTabHref(revCfg.id, "rendered")}"
                           ${isThisRev && mode === "rendered" ? html`aria-current="true"` : ""}
-                          >${revCfg.label}（渲染视图）</a
+                          >${revCfg.label}（完整正文）</a
                         >
                         ${
                           hasRev
@@ -1623,7 +1710,7 @@ ${valueFor("comment")}</textarea>
                                 class="rev-tabs__link"
                                 href="${revTabHref(revCfg.id, "diff")}"
                                 ${isThisRev && mode === "diff" ? html`aria-current="true"` : ""}
-                                >${revCfg.label}（增量 Diff）</a
+                                >${revCfg.label}（变更对比）</a
                               >`
                             : ""
                         }`;
@@ -1647,24 +1734,27 @@ ${valueFor("comment")}</textarea>
                 ? html`<p class="muted">
                       ${
                         activeRev.baseId
-                          ? `对比上一修订版（${revs.find((r) => r.id === activeRev.baseId)?.label ?? activeRev.baseId}）→ ${activeRevConfig?.label}`
+                          ? `版本对比：${revs.find((r) => r.id === activeRev.baseId)?.label ?? activeRev.baseId} → ${activeRevConfig?.label}`
                           : doc.addedInRevision === activeRev.id
                             ? `${activeRevConfig?.label} 新增文档`
-                            : `对比基线 → ${activeRevConfig?.label}`
+                            : `版本对比：基线 → ${activeRevConfig?.label}`
                       }（+${activeRev.stats.added}
-                      / -${activeRev.stats.removed}）。左侧两栏依次为旧行号、新行号。
+                      / -${activeRev.stats.removed}）。左侧两栏分别为原版行号与新版行号。
                     </p>
                     ${raw(diffHtml)}`
                 : html`${
                       highlight
                         ? alert(
                             "accent",
-                            `已定位到第 ${highlight.start}${highlight.end > highlight.start ? `–${highlight.end}` : ""} 行`,
-                            html`高亮部分即引用位置，<a href="#hl">跳转到高亮处</a
-                              >。左侧数字为源文件行号。`,
+                            `已定位至第 ${highlight.start}${highlight.end > highlight.start ? `–${highlight.end}` : ""} 行`,
+                            displaySource.split("\n").length > 30 || highlight.start > 20
+                              ? html`高亮区域为引用所在行，<a href="#hl">跳转至高亮位置</a
+                                  >；左侧数字为源文档行号。`
+                              : "高亮区域为引用所在行；左侧数字为源文档行号。",
                           )
                         : html`<p class="muted">
-                            左侧数字为源文件行号，与审核文档中的 <code>文件:行号</code> 对应。
+                            左侧数字为源文档行号，与审核文档中的
+                            <code>文件:行号</code> 引用一一对应。
                           </p>`
                     }
                     <article class="prose doc">
