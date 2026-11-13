@@ -6,6 +6,8 @@ import type { DocRef } from "./excerpt.js";
 export interface RefTarget {
   path: string;
   lineCount: number;
+  /** Optional display name; reference parsing and URLs continue to use the path. */
+  title?: string;
 }
 
 export interface RefEnv {
@@ -95,7 +97,10 @@ function linkRefs(state: StateCore) {
           open.attrSet("href", docHref(target.path, start, end));
           open.attrSet("class", "ref");
           children.push(open);
-          pushText(state, children, text);
+          let display =
+            position === 0 && file ? text : `${position === 0 ? label : ""}${target.path}:${range}`;
+          if (target.title) display = `${position === 0 ? label : ""}${target.title}:${range}`;
+          pushText(state, children, display);
           children.push(new state.Token("link_close", "a", -1));
         });
       }

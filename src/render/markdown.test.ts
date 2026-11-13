@@ -29,17 +29,17 @@ const links = (text: string, defaultDocument?: string) =>
 
 test("bare line references follow the last explicit file until a ；-clause ends", () => {
   assert.deepEqual(links(":7；account.md:110、:222；图@:23", "prd/login.md"), [
-    ":7 -> prd/login.md:7-7",
+    "prd/login.md:7 -> prd/login.md:7-7",
     "account.md:110 -> prd/account.md:110-110",
-    ":222 -> prd/account.md:222-222",
-    "图@:23 -> prd/login.md:23-23",
+    "prd/account.md:222 -> prd/account.md:222-222",
+    "图@prd/login.md:23 -> prd/login.md:23-23",
   ]);
 });
 
 test("、-continued numbers and ranges link to the same file", () => {
   assert.deepEqual(links("图@:50–74、120", "prd/account.md"), [
-    "图@:50–74 -> prd/account.md:50-74",
-    "120 -> prd/account.md:120-120",
+    "图@prd/account.md:50–74 -> prd/account.md:50-74",
+    "prd/account.md:120 -> prd/account.md:120-120",
   ]);
 });
 
