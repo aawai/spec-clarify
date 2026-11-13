@@ -9,7 +9,46 @@ import { dirname, join } from "node:path";
  * rules would beat every HeroUI rule regardless of specificity.
  */
 const SITE_CSS = `
-:root { color-scheme: light; --highlight: oklch(0.96 0.08 95); --header-height: 56px; }
+:root {
+  color-scheme: light;
+  --highlight: oklch(0.96 0.08 95);
+  --header-height: 56px;
+  --background: oklch(96.4% 0.004 255);
+  --foreground: oklch(21.5% 0.015 255);
+  --surface: oklch(100% 0 0);
+  --surface-foreground: var(--foreground);
+  --surface-secondary: oklch(94.6% 0.005 255);
+  --surface-secondary-foreground: var(--foreground);
+  --surface-tertiary: oklch(92.8% 0.006 255);
+  --surface-tertiary-foreground: var(--foreground);
+  --default: oklch(93.4% 0.005 255);
+  --default-foreground: var(--foreground);
+  --border: oklch(88.5% 0.008 255);
+  --separator: oklch(91% 0.006 255);
+  --muted: oklch(47.5% 0.015 255);
+  --line-number: oklch(51% 0.014 255);
+  --field-foreground: var(--foreground);
+  --field-placeholder: var(--muted);
+  --accent: oklch(48% 0.155 262);
+  --accent-foreground: var(--snow);
+  --accent-hover: color-mix(in oklab, var(--accent) 88%, var(--foreground) 12%);
+  --accent-soft: color-mix(in oklab, var(--accent) 11%, transparent);
+  --accent-soft-foreground: color-mix(in oklab, var(--accent) 72%, var(--foreground) 28%);
+  --accent-soft-hover: color-mix(in oklab, var(--accent) 16%, transparent);
+  --focus: var(--accent);
+  --danger: oklch(51% 0.2 25);
+  --danger-foreground: var(--snow);
+  --danger-hover: color-mix(in oklab, var(--danger) 88%, var(--foreground) 12%);
+  --danger-soft: color-mix(in oklab, var(--danger) 11%, transparent);
+  --danger-soft-foreground: color-mix(in oklab, var(--danger) 75%, var(--foreground) 25%);
+  --success: oklch(50% 0.145 152);
+  --success-foreground: var(--snow);
+  --success-hover: color-mix(in oklab, var(--success) 88%, var(--foreground) 12%);
+  --success-soft: color-mix(in oklab, var(--success) 12%, transparent);
+  --success-soft-foreground: color-mix(in oklab, var(--success) 65%, var(--foreground) 35%);
+  --warning-soft: color-mix(in oklab, var(--warning) 15%, transparent);
+  --warning-soft-foreground: color-mix(in oklab, var(--warning) 45%, var(--foreground) 55%);
+}
 
 @layer base {
   body { margin: 0; background: var(--background); color: var(--foreground); font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif; font-size: 14px; line-height: 1.6; }
@@ -72,7 +111,7 @@ details[open] > summary { margin-bottom: 12px; }
 .status-tabs .tabs__tab { width: auto; gap: 6px; padding: 8px 2px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); background: transparent; box-shadow: none; }
 .status-tabs .tabs__tab:hover { color: var(--foreground); text-decoration: none; }
 .status-tabs .tabs__tab[aria-current="true"] { color: var(--foreground); background: transparent; border-bottom-color: var(--accent); box-shadow: none; }
-.tab-count { font-size: 12px; font-variant-numeric: tabular-nums; opacity: .7; }
+.tab-count { font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; color: var(--muted); }
 
 .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
 .filter-bar .input[type="search"] { flex: 1 1 260px; max-width: 420px; }
@@ -221,7 +260,7 @@ a.ref { white-space: nowrap; }
 
 .doc { padding-left: 56px; }
 .doc > [data-line] { position: relative; }
-.doc > [data-line]::before { content: attr(data-line); position: absolute; left: -56px; width: 40px; text-align: right; color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.9; opacity: .7; }
+.doc > [data-line]::before { content: attr(data-line); position: absolute; left: -56px; width: 40px; text-align: right; color: var(--line-number); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.9; }
 .doc tr[data-line] > :first-child { position: relative; }
 .doc .hl, .doc tr.hl > * { background: var(--highlight); }
 .doc .hl:not(table, tr) { border-radius: 4px; box-shadow: -8px 0 0 var(--highlight), 8px 0 0 var(--highlight); }
