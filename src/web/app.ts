@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { compress } from "hono/compress";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -22,6 +23,7 @@ import {
   type ItemStatus,
 } from "../clarification.js";
 import { formatTime, renderExport } from "../export.js";
+import { handleMcpHttpRequest } from "../mcp/server.js";
 import { loadWorkspace, SourceError, type ProjectConfig, type Workspace } from "../project.js";
 import { renderDiffHtml } from "../render/diff.js";
 import {
@@ -32,11 +34,18 @@ import {
 } from "../render/markdown.js";
 import { buildExcerpts, type DocRef, type Excerpt } from "../render/excerpt.js";
 import type { ReviewGroup, ReviewItem } from "../review/model.js";
-import { ENTRY_LABELS, type Entry, type EntryStore, type ItemActivity } from "../store/entries.js";
+import {
+  ENTRY_LABELS,
+  type Entry,
+  type EntryKind,
+  type EntryStore,
+  type ItemActivity,
+} from "../store/entries.js";
 import { canClarify, ROLE_LABELS, type User, type UserStore } from "../store/users.js";
 import { STYLESHEETS } from "./style.js";
 import {
   alert,
+  appliedChip,
   awaitingChip,
   emptyState,
   layout,
@@ -54,6 +63,10 @@ export interface AppOptions {
   users: UserStore;
   /** Mark the session cookie `Secure`; enable when the site is served over HTTPS. */
   secureCookies?: boolean;
+  /** Enable Streamable HTTP `/mcp` when set; authenticated via `Authorization: Bearer`. */
+  mcpToken?: string;
+  /** Allow MCP write tools (e.g. `resolve_items`) when `/mcp` is enabled. */
+  mcpWrite?: boolean;
 }
 
 interface Session {
@@ -116,6 +129,11 @@ const EntryForm = z.object({
   /** `next`: after a clarification, continue with the next item in the current filter. */
   after: z.literal("next").optional(),
 });
+const ResolutionForm = z.object({
+  clarificationId: z.coerce.number().int().min(1),
+  action: z.enum(["applied", "reopened"]),
+  note: z.string().trim().max(1000, "说明长度不可超过 1000 字").optional(),
+});
 const LoginForm = z.object({ username: z.string().trim().min(1), password: z.string().min(1) });
 const PasswordForm = z
   .object({
@@ -126,7 +144,7 @@ const PasswordForm = z
   .refine((form) => form.password === form.confirm, "两次输入的新密码不一致");
 
 interface FormState {
-  kind: "clarification" | "comment";
+  kind: "clarification" | "comment" | "resolution";
   error: string;
   body: string;
   conflictLatest?: Entry;
@@ -394,6 +412,33 @@ export function createApp(options: AppOptions) {
     );
     c.header("X-Content-Type-Options", "nosniff");
   });
+  const mcpToken = options.mcpToken?.trim() || undefined;
+  if (mcpToken) {
+    const expectedDigest = createHash("sha256").update(mcpToken).digest();
+    app.all("/mcp", async (c) => {
+      const match = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "");
+      if (!match?.[1]) {
+        return c.json(
+          { jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" }, id: null },
+          401,
+          { "WWW-Authenticate": "Bearer" },
+        );
+      }
+      const givenDigest = createHash("sha256").update(match[1]).digest();
+      if (!timingSafeEqual(givenDigest, expectedDigest)) {
+        return c.json(
+          { jsonrpc: "2.0", error: { code: -32001, message: "Unauthorized" }, id: null },
+          401,
+          { "WWW-Authenticate": "Bearer" },
+        );
+      }
+      return await handleMcpHttpRequest(
+        { config, entries },
+        c.req.raw,
+        options.mcpWrite ? { allowWrite: true } : undefined,
+      );
+    });
+  }
   app.use(csrf());
 
   app.onError((error, c) => {
@@ -643,7 +688,7 @@ export function createApp(options: AppOptions) {
       review.items.map((item) => [item.id, itemState(item, activity.get(item.id))]),
     );
     const state = (item: ReviewItem) =>
-      states.get(item.id) ?? { status: "open", awaitingReply: false };
+      states.get(item.id) ?? { status: "open" as const, awaitingReply: false, applied: false };
 
     const ordered =
       filter.status === "pending" ? orderedItems(review.items, config.severities) : review.items;
@@ -764,7 +809,7 @@ export function createApp(options: AppOptions) {
               <tbody class="table__body">
                 ${pagedItems.map((item) => {
                   const itemActivity = activity.get(item.id);
-                  const { status, awaitingReply } = state(item);
+                  const { status, awaitingReply, applied } = state(item);
                   return html`<tr class="table__row">
                     <td class="table__cell col-id mono">${item.id}</td>
                     <td class="table__cell col-title">
@@ -786,6 +831,7 @@ export function createApp(options: AppOptions) {
                     <td class="table__cell col-status">
                       <div class="status-cell">
                         ${statusChip(status)} ${awaitingReply ? awaitingChip() : ""}
+                        ${applied ? appliedChip() : ""}
                       </div>
                     </td>
                     <td class="table__cell col-num">
@@ -1043,7 +1089,9 @@ export function createApp(options: AppOptions) {
       entries.activity(),
     ]);
     const clarification = history.filter((entry) => entry.kind === "clarification").at(-1);
-    const { status, awaitingReply } = itemState(item, activity.get(item.id));
+    const itemActivity = activity.get(item.id);
+    const { status, awaitingReply, applied } = itemState(item, itemActivity);
+    const latestResolution = itemActivity?.latestResolution;
     // Review text is rendered before the page so the references it links can be excerpted.
     const refs: DocRef[] = [];
     const env: RefEnv = { ...refEnv(workspace, item), refs };
@@ -1138,7 +1186,7 @@ export function createApp(options: AppOptions) {
     const errorFor = (kind: FormState["kind"]) => {
       if (form?.kind !== kind) return "";
       const errorTitle = httpStatus === 409 ? "提交失败：存在版本冲突" : "表单校验未通过";
-      if (kind === "clarification" && form.conflictLatest) {
+      if ((kind === "clarification" || kind === "resolution") && form.conflictLatest) {
         const latest = form.conflictLatest;
         const excerpt = latest.body.length > 280 ? `${latest.body.slice(0, 280)}…` : latest.body;
         return alert(
@@ -1297,7 +1345,7 @@ ${valueFor("clarification")}</textarea>
         <div class="item-head__meta">
           <span class="chip chip--default chip--id">${item.id}</span>
           ${statusChip(status)} ${awaitingReply ? awaitingChip() : ""}
-          ${item.severity ? severity(item.severity) : ""}
+          ${applied ? appliedChip() : ""} ${item.severity ? severity(item.severity) : ""}
           <a href="${docHref(item.group.source, item.line, item.endLine)}"
             >${documentLabel(workspace, item.group.source)} 第 ${item.line} 行</a
           >
@@ -1402,7 +1450,9 @@ ${valueFor("comment")}</textarea>
                   id="current-clarification"
                   class="card card--default card--padded conclusion ${status === "stale" ? "is-stale" : ""}"
                 >
-                  <h2 class="section-title">当前澄清 ${statusChip(status)}</h2>
+                  <h2 class="section-title">
+                    当前澄清 ${statusChip(status)} ${applied ? appliedChip() : ""}
+                  </h2>
                   <div class="prose conclusion__body">
                     ${raw(entryMd.render(clarification.body, env))}
                   </div>
@@ -1413,6 +1463,44 @@ ${valueFor("comment")}</textarea>
                     >
                     <span>· ${formatTime(clarification.createdAt)}</span>
                   </div>
+                  ${
+                    latestResolution && latestResolution.clarificationId === clarification.id
+                      ? html`<p class="conclusion__resolution muted">
+                          ${latestResolution.action === "applied" ? "已落地" : "已取消落地"}：${latestResolution.actor}
+                          ·
+                          ${formatTime(latestResolution.createdAt)}${latestResolution.note ? `（${latestResolution.note}）` : ""}
+                        </p>`
+                      : ""
+                  }
+                  ${
+                    status === "clarified"
+                      ? html`<form
+                          method="post"
+                          action="${action("resolutions")}"
+                          class="resolution-form"
+                        >
+                          ${errorFor("resolution")}
+                          <input type="hidden" name="clarificationId" value="${clarification.id}" />
+                          <input
+                            type="hidden"
+                            name="action"
+                            value="${applied ? "reopened" : "applied"}"
+                          />
+                          <input
+                            class="input"
+                            type="text"
+                            name="note"
+                            maxlength="1000"
+                            value="${valueFor("resolution")}"
+                            aria-label="${applied ? "取消原因（可选）" : "落地说明（可选）"}"
+                            placeholder="${applied ? "取消原因（可选）" : "落地说明（可选，如文档或提交号）"}"
+                          />
+                          <button class="button button--secondary button--sm" type="submit">
+                            ${applied ? "取消已落地" : "标记已落地"}
+                          </button>
+                        </form>`
+                      : ""
+                  }
                 </section>`
               : ""
           }
@@ -1424,7 +1512,7 @@ ${valueFor("comment")}</textarea>
 
   app.get("/items/:id", (c) => renderItem(c, c.req.param("id")));
 
-  const submit = (kind: FormState["kind"]) => async (c: Context<Env>) => {
+  const submit = (kind: EntryKind) => async (c: Context<Env>) => {
     const id = c.req.param("id") ?? "";
     const { user } = session(c);
     if (kind === "clarification" && !canClarify(user.role)) {
@@ -1503,6 +1591,43 @@ ${valueFor("comment")}</textarea>
   };
   app.post("/items/:id/clarifications", submit("clarification"));
   app.post("/items/:id/comments", submit("comment"));
+  app.post("/items/:id/resolutions", async (c) => {
+    const id = c.req.param("id") ?? "";
+    const { user } = session(c);
+    const rawBody = await c.req.parseBody();
+    const note = text(rawBody, "note");
+    const fail = (error: string, httpStatus: 409 | 422, conflictLatest?: Entry) =>
+      renderItem(c, id, { kind: "resolution", error, body: note, conflictLatest }, httpStatus);
+    const parsed = ResolutionForm.safeParse(rawBody);
+    if (!parsed.success) {
+      return fail(parsed.error.issues[0]?.message ?? "输入内容无效，请检查后重试。", 422);
+    }
+    const reviewItems = (await loadWorkspace(config)).review.items;
+    const item = reviewItems.find((candidate) => candidate.id === id);
+    if (!item) return renderItem(c, id);
+    const outcome = await entries.resolve({
+      itemId: item.id,
+      action: parsed.data.action,
+      actor: user.displayName,
+      note: parsed.data.note,
+      clarificationId: parsed.data.clarificationId,
+    });
+    if (!outcome.ok) {
+      if (outcome.reason === "no_clarification") {
+        return fail("该条目尚未提交澄清，无法标记落地。", 409);
+      }
+      const { latest } = outcome;
+      return fail(
+        `${latest.author.displayName}（${ROLE_LABELS[latest.author.role]}）已于 ${formatTime(latest.createdAt)} 更新了澄清结论，请核对最新结论后再标记。`,
+        409,
+        latest,
+      );
+    }
+    return c.redirect(
+      `/items/${encodeURIComponent(item.id)}${filterSearch(parseFilter(c))}#current-clarification`,
+      303,
+    );
+  });
 
   app.get("/docs", async (c) => {
     const { documents } = await loadWorkspace(config);
@@ -1769,13 +1894,18 @@ ${valueFor("comment")}</textarea>
 
   app.get("/export.md", async (c) => {
     const { review, reviews } = await loadWorkspace(config);
-    const [all, activity] = await Promise.all([entries.all(), entries.activity()]);
+    const [all, activity, resolutions] = await Promise.all([
+      entries.all(),
+      entries.activity(),
+      entries.allResolutions(),
+    ]);
     const markdown = renderExport({
       title: config.title,
       sources: reviews.map((doc) => doc.path),
       review,
       entries: all,
       activity,
+      resolutions,
       generatedAt: new Date(),
     });
     return c.body(markdown, 200, {

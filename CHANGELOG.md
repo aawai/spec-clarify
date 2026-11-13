@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- 新增只读 MCP 服务（`spec-clarify mcp` 本地 stdio 模式与 `serve --mcp-token` / `SPEC_CLARIFY_MCP_TOKEN` 远程 Streamable HTTP `/mcp` 端点），支持 `list_items`、`get_item`、`list_documents`、`get_document` 与 `diff_document`，供 AI 助手按条件读取澄清结论、源文档版本与纯文本 Unified Diff；提供 `spec-clarify mcp --print-config` 输出 `.mcp.json` 配置片段。
+- 新增只追加的澄清“已落地”回执（`resolutions` 表与 `applied` 状态推导）：支持通过站点条目页“标记已落地 / 取消已落地”、CLI `spec-clarify ack` / `reopen` 以及可选开启的 MCP `resolve_items`（`mcp --write` / `serve --mcp-write` / `SPEC_CLARIFY_MCP_WRITE=1`）记录并校验 `clarificationId`；MCP `list_items` 新增 `applied` 与 `afterClarificationId` 过滤参数，并在产品更新澄清或条目变为“需复核”时自动失效，支持多批澄清增量处理。导出 Markdown 与站点列表/详情同步展示“已落地”状态与回执历史。
+- 将 `skills/` 纳入分发包并新增 `spec-clarify skill path` / `spec-clarify skill install [--target <目录>]`，方便第三方项目在装包后直接同步或更新内置审核文档 Skill。
+
 ## [0.1.8] - 2026-11-13
 
 ### Changed

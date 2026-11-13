@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { diffLines, diffStats, renderDiffHtml } from "./diff.js";
+import { diffLines, diffStats, formatUnifiedDiff, renderDiffHtml } from "./diff.js";
 
 test("diffStats counts added and removed lines accurately", () => {
   assert.deepEqual(diffStats("a\nb\nc", "a\nb\nc"), { changed: false, added: 0, removed: 0 });
@@ -40,4 +40,23 @@ test("renderDiffHtml renders inline word/char diffs, escapes HTML, and folds lon
   // Dual line numbers on changed line (13 -> 13)
   assert.match(html, /<span class="diff__num">13<\/span><span class="diff__num"><\/span>/);
   assert.match(html, /<span class="diff__num"><\/span><span class="diff__num">13<\/span>/);
+});
+
+test("formatUnifiedDiff renders standard hunks with context and handles added/unchanged docs", () => {
+  assert.equal(formatUnifiedDiff("a\nb", "a\nb"), "");
+  assert.equal(
+    formatUnifiedDiff(undefined, "line1\nline2", { newLabel: "v1/added.md" }),
+    "--- /dev/null\n+++ v1/added.md\n@@ -0,0 +1,2 @@\n+line1\n+line2\n",
+  );
+  const oldDoc = Array.from({ length: 15 }, (_, i) => `row ${i + 1}`).join("\n");
+  const newDoc = oldDoc.replace("row 2", "row 2b").replace("row 14", "row 14b");
+  const patch = formatUnifiedDiff(oldDoc, newDoc, {
+    oldLabel: "baseline/spec.md",
+    newLabel: "v1/spec.md",
+    contextLines: 1,
+  });
+  assert.match(patch, /^--- baseline\/spec\.md\n\+\+\+ v1\/spec\.md\n@@ -1,3 \+1,3 @@/m);
+  assert.match(patch, /@@ -13,3 \+13,3 @@/);
+  assert.match(patch, /-row 2\n\+row 2b/);
+  assert.match(patch, /-row 14\n\+row 14b/);
 });

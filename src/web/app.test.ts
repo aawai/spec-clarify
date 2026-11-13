@@ -774,3 +774,52 @@ test("detail scaffolding supports permanent initial panel, prefill=1, 409 latest
     assert.match(listOnlyAwaiting, /group-nav__badge--accent[^>]*>待回复 1/);
   });
 });
+
+test("clarified items can be marked applied and reopened in Web UI with optimistic concurrency", async () => {
+  await withSite(async ({ app }) => {
+    const pm = await signIn(app, "pm");
+    const dev = await signIn(app, "dev");
+    const initial = await formValues(app, pm, "A1");
+    await post(app, pm, "/items/A1/clarifications", {
+      body: "锁定 15 分钟",
+      digest: initial.digest,
+      base: "0",
+    });
+
+    const devPage = await (await app.request("/items/A1", { headers: { Cookie: dev } })).text();
+    const clarificationId = /name="clarificationId" value="(\d+)"/.exec(devPage)?.[1] ?? "0";
+    assert.notEqual(clarificationId, "0");
+
+    const applied = await post(app, dev, "/items/A1/resolutions", {
+      clarificationId,
+      action: "applied",
+      note: "已修改 login.md",
+    });
+    assert.equal(applied.status, 303);
+
+    const detail = await (await app.request("/items/A1", { headers: { Cookie: dev } })).text();
+    assert.match(detail, /已落地/);
+    assert.match(detail, /已落地：开发/);
+    assert.match(detail, /已修改 login\.md/);
+    assert.match(detail, /取消已落地/);
+
+    const listAll = await (await app.request("/?status=all", { headers: { Cookie: dev } })).text();
+    assert.match(listAll, /已落地/);
+
+    // Product submits a newer clarification -> applied badge clears and old clarificationId is rejected with 409
+    await post(app, pm, "/items/A1/clarifications", {
+      body: "改为锁定 30 分钟",
+      digest: initial.digest,
+      base: clarificationId,
+    });
+    const staleAck = await post(app, dev, "/items/A1/resolutions", {
+      clarificationId,
+      action: "applied",
+      note: "旧结论",
+    });
+    assert.equal(staleAck.status, 409);
+    const conflictPage = await staleAck.text();
+    assert.match(conflictPage, /更新了澄清结论/);
+    assert.match(conflictPage, /改为锁定 30 分钟/);
+  });
+});

@@ -35,6 +35,20 @@ const SCHEMA = [
     BEGIN SELECT RAISE(ABORT, 'entries are append-only'); END`,
   `CREATE TRIGGER IF NOT EXISTS entries_no_delete BEFORE DELETE ON entries
     BEGIN SELECT RAISE(ABORT, 'entries are append-only'); END`,
+  `CREATE TABLE IF NOT EXISTS resolutions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id TEXT NOT NULL,
+    clarification_id INTEGER NOT NULL REFERENCES entries (id),
+    action TEXT NOT NULL CHECK (action IN ('applied', 'reopened')),
+    actor TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS resolutions_item ON resolutions (item_id, id)",
+  `CREATE TRIGGER IF NOT EXISTS resolutions_no_update BEFORE UPDATE ON resolutions
+    BEGIN SELECT RAISE(ABORT, 'resolutions are append-only'); END`,
+  `CREATE TRIGGER IF NOT EXISTS resolutions_no_delete BEFORE DELETE ON resolutions
+    BEGIN SELECT RAISE(ABORT, 'resolutions are append-only'); END`,
 ];
 
 /** Opens the project database, creating the file and tables on first use. */

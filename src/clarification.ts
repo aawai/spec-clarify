@@ -20,6 +20,8 @@ export interface ItemState {
   status: ItemStatus;
   /** A comment arrived after the latest clarification (or before any), so someone awaits an answer. */
   awaitingReply: boolean;
+  /** Whether the latest clarification has an active applied resolution against the current item text. */
+  applied: boolean;
 }
 
 export function itemState(
@@ -34,5 +36,12 @@ export function itemState(
       : "stale";
   const awaitingReply =
     activity?.latestCommentId !== undefined && activity.latestCommentId > (clarification?.id ?? 0);
-  return { status, awaitingReply };
+  const resolution = activity?.latestResolution;
+  const applied =
+    status === "clarified" &&
+    clarification !== undefined &&
+    resolution !== undefined &&
+    resolution.clarificationId === clarification.id &&
+    resolution.action === "applied";
+  return { status, awaitingReply, applied };
 }
