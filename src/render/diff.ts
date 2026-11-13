@@ -252,7 +252,7 @@ export function renderDiffHtml(oldSource: string | undefined, newSource: string)
   const lines = diffLines(oldSource, newSource);
   const hasChange = lines.some((line) => line.type !== "equal");
   if (!hasChange) {
-    return `<p class="muted">与对比版本内容一致，无增量变更。</p>`;
+    return `<p class="muted">与基准版本内容一致，无变更。</p>`;
   }
 
   // Pair adjacent del + add blocks for inline highlights.
@@ -305,9 +305,9 @@ export function renderDiffHtml(oldSource: string | undefined, newSource: string)
     const rangeLabel =
       firstNew !== undefined && lastNew !== undefined ? `第 ${firstNew}–${lastNew} 行` : "";
     chunks.push(
-      `<details class="diff__fold"><summary class="diff__expand">展开未变更的 ${hidden.length} 行${rangeLabel ? `（${rangeLabel}）` : ""}</summary><div class="diff__folded">${hidden.map((line) => renderRow(line)).join("")}</div></details>`,
+      `<details class="diff__fold"><summary class="diff__expand">展开未变更行（共 ${hidden.length} 行${rangeLabel ? `，${rangeLabel}` : ""}）</summary><div class="diff__folded">${hidden.map((line) => renderRow(line)).join("")}</div></details>`,
     );
   }
 
-  return `<div class="diff" role="region" aria-label="增量 Diff">${chunks.join("")}</div>`;
+  return `<div class="diff" role="region" aria-label="变更对比">${chunks.join("")}</div>`;
 }

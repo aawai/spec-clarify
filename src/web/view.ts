@@ -41,8 +41,15 @@ export function staleChip(label: string): Html {
   return html`<span class="chip chip--danger chip--soft">${label}</span>`;
 }
 
-export function progressBar(done: number, total: number, label?: string): Html {
-  const percent = total ? Math.round((done / total) * 100) : 0;
+export function progressBar(done: number, total: number, label?: string, awaitingDone = 0): Html {
+  const totalPercent = total ? Math.round((done / total) * 100) : 0;
+  const awaitingCount = Math.max(0, Math.min(done, awaitingDone));
+  const readyDone = done - awaitingCount;
+  const readyPercent = total ? Math.round((readyDone / total) * 100) : 0;
+  const outputText =
+    awaitingCount > 0
+      ? `${done} / ${total}（${totalPercent}%，含 ${awaitingCount} 条待回复）`
+      : `${done} / ${total}（${totalPercent}%）`;
   return html`<div
     class="progress-bar ${label ? "progress-bar--md" : "progress-bar--sm"} progress-bar--success"
     role="progressbar"
@@ -54,11 +61,16 @@ export function progressBar(done: number, total: number, label?: string): Html {
     ${
       label
         ? html`<span data-slot="label">${label}</span>
-            <span class="progress-bar__output">${done} / ${total}（${percent}%）</span>`
+            <span class="progress-bar__output">${outputText}</span>`
         : ""
     }
     <div class="progress-bar__track">
-      <div class="progress-bar__fill" style="width: ${percent}%"></div>
+      ${
+        awaitingCount > 0
+          ? html`<div class="progress-bar__awaiting" style="width: ${totalPercent}%"></div>`
+          : ""
+      }
+      <div class="progress-bar__fill" style="width: ${readyPercent}%"></div>
     </div>
   </div>`;
 }
@@ -118,13 +130,13 @@ export function layout(options: LayoutOptions, body: Html): Html {
             ${
               user
                 ? html`<nav class="app-nav" aria-label="主导航">
-                      ${navLink("items", "/", "澄清条目")} ${navLink("docs", "/docs", "文档")}
+                      ${navLink("items", "/", "澄清条目")} ${navLink("docs", "/docs", "项目文档")}
                     </nav>
                     <div class="user-menu">
                       <a
                         class="button button--secondary button--sm"
                         href="/export.md"
-                        title="导出本项目全部条目的澄清状态与完整历史记录（Markdown，不受当前筛选影响）"
+                        title="导出全项目所有条目的当前状态与完整历史（Markdown 格式，不受筛选条件影响）"
                         >导出记录</a
                       >
                       <a
@@ -136,7 +148,9 @@ export function layout(options: LayoutOptions, body: Html): Html {
                         ></a
                       >
                       <form method="post" action="/logout">
-                        <button class="button button--ghost button--sm" type="submit">退出</button>
+                        <button class="button button--ghost button--sm" type="submit">
+                          退出登录
+                        </button>
                       </form>
                     </div>`
                 : ""

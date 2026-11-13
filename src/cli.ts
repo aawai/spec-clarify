@@ -128,7 +128,9 @@ async function main(argv: string[]) {
       const users = new UserStore(client);
       const app = createApp({ config, entries: new EntryStore(client), users, secureCookies });
       if ((await users.count()) === 0) {
-        console.warn("尚无账号：先运行 spec-clarify user add <用户名> --name <姓名> --role admin");
+        console.warn(
+          "尚无系统账号，请先执行：spec-clarify user add <用户名> --name <姓名> --role admin",
+        );
       }
       const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
         console.log(
@@ -179,23 +181,25 @@ async function main(argv: string[]) {
           console.log(
             `已创建 ${username}（${displayName}，${ROLE_LABELS[role]}）。初始密码：${password}`,
           );
-          console.log("请把初始密码安全地交给本人，登录后在“账户”页修改。");
+          console.log("请通过安全渠道将初始密码告知本人，并提示其登录后在「账户」页及时修改。");
           return;
         }
         const user = await users.byUsername(username);
-        if (!user) throw new UsageError(`没有用户 ${username}`);
+        if (!user) throw new UsageError(`未找到指定用户：${username}`);
         switch (action) {
           case "reset-password": {
             const password = generatePassword();
             await users.setPassword(user.id, await hashPassword(password));
-            console.log(`已重置 ${username} 的密码，原有登录已失效。新密码：${password}`);
+            console.log(
+              `已重置 ${username} 的密码，该账号现有登录会话已全部注销。新密码：${password}`,
+            );
             return;
           }
           case "role": {
             const role = extra ?? "";
             if (!isRole(role)) throw new UsageError(`角色必须是 ${ROLES.join("、")} 之一`);
             await users.setRole(user.id, role);
-            console.log(`${username} 的角色已改为 ${ROLE_LABELS[role]}`);
+            console.log(`已将 ${username} 的角色变更为 ${ROLE_LABELS[role]}`);
             return;
           }
           case "disable":
@@ -204,14 +208,14 @@ async function main(argv: string[]) {
             console.log(`${username} 已${action === "disable" ? "停用" : "启用"}`);
             return;
           default:
-            throw new UsageError(`未知的 user 子命令 ${action ?? ""}`);
+            throw new UsageError(`无效的 user 子命令：${action ?? ""}`);
         }
       });
       return;
     }
 
     default:
-      throw new UsageError(`未知命令 ${command}`);
+      throw new UsageError(`无效命令：${command}`);
   }
 }
 

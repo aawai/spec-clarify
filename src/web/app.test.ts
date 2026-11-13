@@ -179,7 +179,7 @@ test("clarifying while browsing 未澄清 keeps the filter and pages on to the n
       await app.request(location.replace(/#.*$/, ""), { headers: { Cookie: pm } })
     ).text();
     assert.match(after, /href="\/items\/A2\?status=open"/);
-    assert.match(after, /不在筛选结果中/);
+    assert.match(after, /不在当前筛选范围内/);
   });
 });
 
@@ -303,16 +303,16 @@ test("提交并下一条 records the clarification and moves on to the next item
     assert.match(location, /^\/items\/A2\?status=open&receipt=/);
     const dev = await signIn(app, "dev");
     const otherSession = await (await app.request(location, { headers: { Cookie: dev } })).text();
-    assert.doesNotMatch(otherSession, /澄清已保存/);
+    assert.doesNotMatch(otherSession, /澄清结论已保存/);
     const receipt = await (await app.request(location, { headers: { Cookie: pm } })).text();
-    assert.match(receipt, /澄清已保存/);
+    assert.match(receipt, /澄清结论已保存/);
     assert.match(receipt, /href="\/items\/A1\?status=open#entry-\d+"/);
     const replay = await (await app.request(location, { headers: { Cookie: pm } })).text();
-    assert.doesNotMatch(replay, /澄清已保存/);
+    assert.doesNotMatch(replay, /澄清结论已保存/);
     const forged = await (
       await app.request("/items/A2?status=open&receipt=fake", { headers: { Cookie: pm } })
     ).text();
-    assert.doesNotMatch(forged, /澄清已保存/);
+    assert.doesNotMatch(forged, /澄清结论已保存/);
     assert.equal((await entries.entriesFor("A1")).length, 1);
 
     const last = await formValues(app, pm, "A3");
@@ -325,7 +325,9 @@ test("提交并下一条 records the clarification and moves on to the next item
     const endLocation = atEnd.headers.get("Location") ?? "";
     assert.match(endLocation, /^\/items\/A3\?status=open&receipt=/);
     const endPage = await (await app.request(endLocation, { headers: { Cookie: pm } })).text();
-    assert.match(endPage, /当前筛选中没有下一条/);
+    assert.match(endPage, /当前筛选范围内已无后续条目/);
+    assert.match(endPage, /查看本次提交记录/);
+    assert.doesNotMatch(endPage, /返回上一条查看提交记录/);
   });
 });
 
@@ -377,6 +379,12 @@ test("product queue is a deduplicated pending union ordered by configured severi
       after: "next",
     });
     assert.match(submitted.headers.get("Location") ?? "", /^\/items\/A1\?status=pending&receipt=/);
+
+    const pmStale = await (await app.request("/items/A3", { headers: { Cookie: pm } })).text();
+    assert.match(pmStale, /载入上一版正文/);
+    const devStale = await (await app.request("/items/A3", { headers: { Cookie: dev } })).text();
+    assert.match(devStale, /请待产品或管理员核对后重新确认/);
+    assert.doesNotMatch(devStale, /重新提交|载入上一版正文/);
   });
 });
 
@@ -392,9 +400,16 @@ test("detail forms follow roles and conflicts reopen the update with its draft",
     });
     const product = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
     assert.match(product, /<details[^>]*>\s*<summary class="section-title">更新澄清/);
-    assert.match(product, /<details[^>]*>\s*<summary class="section-title">评论 \/ 追问/);
+    assert.match(
+      product,
+      /<section id="comment" class="card card--default card--padded">\s*<h2 class="section-title">评论 \/ 追问<\/h2>/,
+    );
     const engineer = await (await app.request("/items/A1", { headers: { Cookie: dev } })).text();
-    assert.match(engineer, /<details[^>]*\sopen\s*>\s*<summary class="section-title">评论 \/ 追问/);
+    assert.match(
+      engineer,
+      /<section id="comment" class="card card--default card--padded">\s*<h2 class="section-title">评论 \/ 追问<\/h2>/,
+    );
+    assert.match(engineer, /href="#comment-body"[^>]*>跳至评论输入框/);
     const conflict = await post(app, pm, "/items/A1/clarifications", {
       body: "我的草稿",
       digest: initial.digest,
@@ -468,7 +483,7 @@ test("docs list, diff viewer, excerpt diff shortcuts, and entry body ref links w
         headers: { Cookie: pm },
       })
     ).text();
-    assert.match(v2DiffHtml, /对比上一修订版（V1）→ V2/);
+    assert.match(v2DiffHtml, /版本对比：V1 → V2/);
     assert.match(v2DiffHtml, /<ins> 15 分钟<\/ins>/);
 
     // Unchanged document in V1 shows notice
@@ -493,7 +508,7 @@ test("docs list, diff viewer, excerpt diff shortcuts, and entry body ref links w
     const itemHtml = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
     assert.match(
       itemHtml,
-      /href="\/docs\/view\?path=specs%2Flogin\.md&amp;rev=v1&amp;mode=diff"[^>]*>查看 V1 增量变动<\/a\s*>/,
+      /href="\/docs\/view\?path=specs%2Flogin\.md&amp;rev=v1&amp;mode=diff"[^>]*>查看 V1 变更对比<\/a\s*>/,
     );
     assert.match(
       itemHtml,
@@ -525,15 +540,21 @@ test("default view omits filter-reset chrome, empty pending queue links to all, 
     ).text();
     assert.doesNotMatch(defaultDetail, /澄清条目（筛选结果）/);
 
+    const allList = await (await app.request("/?status=all", { headers: { Cookie: pm } })).text();
+    assert.doesNotMatch(allList, /清除筛选/);
+    const allDetail = await (
+      await app.request("/items/A1?status=all", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(allDetail, /澄清条目（全部）/);
+
     const filteredList = await (
-      await app.request("/?status=all", { headers: { Cookie: pm } })
+      await app.request("/?status=open", { headers: { Cookie: pm } })
     ).text();
     assert.match(filteredList, /清除筛选/);
     const filteredDetail = await (
-      await app.request("/items/A1?status=all", { headers: { Cookie: pm } })
+      await app.request("/items/A1?status=open", { headers: { Cookie: pm } })
     ).text();
     assert.match(filteredDetail, /澄清条目（筛选结果）/);
-
     // One clarification without comments keeps 处理记录 collapsed; adding a comment opens it.
     const a1 = await formValues(app, pm, "A1");
     await post(app, pm, "/items/A1/clarifications", {
@@ -574,7 +595,7 @@ test("default view omits filter-reset chrome, empty pending queue links to all, 
       });
     }
     const emptyPending = await (await app.request("/", { headers: { Cookie: pm } })).text();
-    assert.match(emptyPending, /当前没有待处理的条目/);
+    assert.match(emptyPending, /当前暂无待处理条目/);
     assert.match(emptyPending, /href="\/\?status=all"[^>]*>查看全部条目/);
   });
 });
@@ -583,7 +604,7 @@ test("shell brand mark, login heading hierarchy, and item-head title-first order
   await withSite(async ({ app }) => {
     const loginHtml = await (await app.request("/login")).text();
     assert.match(loginHtml, /<span class="brand__mark"[^>]*>SC<\/span>/);
-    assert.match(loginHtml, /<p class="login-head__site">[^<]+<\/p>\s*<h1>登录<\/h1>/);
+    assert.match(loginHtml, /<div class="login-head">\s*<h1>登录<\/h1>\s*<\/div>/);
 
     const pm = await signIn(app, "pm");
     const detail = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
@@ -607,17 +628,17 @@ test("list keeps stable columns across status tabs, shows pending context, and p
 
     // Stable table headers even when zero entries exist, and group-nav retains progress bar in pending view
     const page1 = await (await app.request("/", { headers: { Cookie: pm } })).text();
-    assert.match(page1, /<th class="table__column col-num">记录<\/th>/);
+    assert.match(page1, /<th class="table__column col-num">记录数<\/th>/);
     assert.match(page1, /<th class="table__column col-time">最近更新<\/th>/);
     assert.match(page1, /<td class="table__cell col-num">\s*—\s*<\/td>/);
-    assert.match(page1, /group-nav__badge[^>]*>待 125<\/span\s*>/);
+    assert.match(page1, /group-nav__badge[^>]*>待办 125<\/span\s*>/);
     assert.match(page1, /class="group-nav__count"[^>]*>0\/125<\/span\s*>/);
     assert.match(page1, /第 1–50 条，共 125 条/);
     assert.match(page1, /href="\/items\/B001\?status=pending"/);
     assert.doesNotMatch(page1, /href="\/items\/B051\?status=pending"/);
     assert.match(page1, /accesskey="q"/);
     assert.match(page1, /accesskey="n"/);
-    assert.match(page1, /href="\/export\.md"\s+title="[^"]*不受当前筛选影响/);
+    assert.match(page1, /href="\/export\.md"\s+title="[^"]*不受筛选条件影响/);
 
     // Switching to page 2 carries page=2 to detail links and breadcrumb return links
     const page2 = await (
@@ -670,8 +691,10 @@ test("detail scaffolding supports permanent initial panel, prefill=1, 409 latest
       initialPage,
       /<section id="clarify" class="card card--default card--padded">\s*<h2 class="section-title">提交澄清<\/h2>/,
     );
-    assert.match(initialPage, /支持 Markdown 与 <code>文件:行号<\/code>/);
+    assert.match(initialPage, /支持\s+Markdown\s+语法及\s+<code>文件:行号<\/code>/);
     assert.match(initialPage, /class="mobile-jump"[\s\S]*href="#clarify"[\s\S]*href="#comment"/);
+    assert.match(initialPage, /class="skip-link" href="#clarify-body"/);
+    assert.match(initialPage, /id="clarify-body"[\s\S]*accesskey="c"/);
 
     const a1 = await formValues(app, pm, "A1");
     await post(app, pm, "/items/A1/clarifications", {
@@ -689,7 +712,11 @@ test("detail scaffolding supports permanent initial panel, prefill=1, 409 latest
     assert.match(clarified, /class="entry__meta"[\s\S]*?chip--role"[^>]*>\s*产品\s*<\/span\s*>/);
     assert.match(
       clarified,
-      /仅此 1 条澄清记录，完整正文见「<a href="#current-clarification">当前澄清<\/a>」/,
+      /此为当前唯一澄清记录，完整内容见「<a\s+href="#current-clarification"\s*>当前澄清<\/a\s*>」/,
+    );
+    assert.match(
+      clarified,
+      /class="mobile-jump"[\s\S]*href="#current-clarification"[\s\S]*href="#comment"/,
     );
     assert.doesNotMatch(clarified, /已定稿：输错 5 次锁定 15 分钟。<\/textarea>/);
     assert.match(
@@ -719,10 +746,31 @@ test("detail scaffolding supports permanent initial panel, prefill=1, 409 latest
     );
     assert.match(conflictHtml, /我的并发草稿<\/textarea>/);
 
-    // Engineer comment adds role chip and opens history with full prose
+    // Engineer comment adds role chip, opens #clarify for awaitingReply, preserves deduplication, and marks group progress
     await post(app, dev, "/items/A1/comments", { body: "需发短信通知吗？", digest: a1.digest });
     const withComment = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
     assert.match(withComment, /class="entry__meta"[\s\S]*?chip--role"[^>]*>\s*工程\s*<\/span\s*>/);
-    assert.doesNotMatch(withComment, /仅此 1 条澄清记录/);
+    assert.match(withComment, /<details[^>]*id="clarify"[^>]*\sopen\s*>/);
+    assert.match(withComment, /class="mobile-jump"[\s\S]*href="#clarify"[^>]*>更新澄清/);
+    assert.match(
+      withComment,
+      /此为当前生效澄清，完整内容见「<a\s+href="#current-clarification"\s*>当前澄清<\/a\s*>」/,
+    );
+
+    const listAwaiting = await (await app.request("/", { headers: { Cookie: pm } })).text();
+    assert.match(listAwaiting, /progress-bar__awaiting/);
+    assert.match(listAwaiting, /group-nav__badge"[^>]*>待办 3/);
+
+    // Once all items in the group are clarified and only an awaiting-reply item remains, show accent badge
+    for (const id of ["A2", "A3"]) {
+      const values = await formValues(app, pm, id);
+      await post(app, pm, `/items/${id}/clarifications`, {
+        body: "已明确",
+        digest: values.digest,
+        base: values.base ?? "0",
+      });
+    }
+    const listOnlyAwaiting = await (await app.request("/", { headers: { Cookie: pm } })).text();
+    assert.match(listOnlyAwaiting, /group-nav__badge--accent[^>]*>待回复 1/);
   });
 });
