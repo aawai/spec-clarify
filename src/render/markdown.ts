@@ -8,6 +8,8 @@ export interface RefTarget {
   lineCount: number;
   /** Optional display name; reference parsing and URLs continue to use the path. */
   title?: string;
+  /** Revision metadata when `path` points to a revision file rather than a baseline document. */
+  revision?: { id: string; basePath: string };
 }
 
 export interface RefEnv {
@@ -20,15 +22,17 @@ export interface RefEnv {
 }
 
 /**
- * `文件:行号`, `图@文件:行号`, `:行号` and `、`-continued line lists. The optional `<label>@`
- * prefix is kept in the link text. The look-behind keeps clock times (`18:04:38`), URLs and
- * e-mail addresses from being read as references.
+ * Matches:
+ * 1. Line references: `文件:行号`, `图@文件:行号`, `@/文件:行号`, `:行号` and `、`-continued lists.
+ * 2. Bare document references: `文件.md` or `@/文件.md` without line numbers.
+ * The look-behind keeps clock times (`18:04:38`), URLs and e-mail addresses from matching.
  */
 const REF =
-  /(?<![A-Za-z0-9_:/.@-])(\p{L}{1,4}@)?((?:[\p{L}\p{N}_.-]+\/)*[\p{L}\p{N}_.-]+\.md)?:(\d+(?:[–-]\d+)?(?:、\d+(?:[–-]\d+)?)*)/gu;
+  /(?<![A-Za-z0-9_:/.@-])(?:(\p{L}{1,4}@)?(?:(@\/)?((?:[\p{L}\p{N}_.-]+\/)*[\p{L}\p{N}_.-]+\.md))?:(\d+(?:[–-]\d+)?(?:、\d+(?:[–-]\d+)?)*)|(@\/)?((?:[\p{L}\p{N}_.-]+\/)*[\p{L}\p{N}_.-]+\.md)(?![A-Za-z0-9_./-]|:\d))/gu;
 
-export function docHref(path: string, start?: number, end = start): string {
+export function docHref(path: string, start?: number, end = start, rev?: string): string {
   const params = new URLSearchParams({ path });
+  if (rev) params.set("rev", rev);
   if (start !== undefined) {
     params.set("line", String(start));
     params.set("end", String(end));
@@ -63,9 +67,20 @@ function linkRefs(state: StateCore) {
     if (block.type !== "inline" || !block.children) continue;
     // `；`/`;` closes a clause; within a clause a bare `:行号` follows the last explicit file.
     let currentFile = env.defaultDocument;
+    let linkDepth = 0;
     const children: Token[] = [];
     for (const child of block.children) {
-      if (child.type !== "text") {
+      if (child.type === "link_open") {
+        linkDepth++;
+        children.push(child);
+        continue;
+      }
+      if (child.type === "link_close") {
+        linkDepth = Math.max(0, linkDepth - 1);
+        children.push(child);
+        continue;
+      }
+      if (child.type !== "text" || linkDepth > 0) {
         children.push(child);
         continue;
       }
@@ -76,25 +91,64 @@ function linkRefs(state: StateCore) {
         pushText(state, children, before);
         cursor = match.index + match[0].length;
 
-        const [, matchedLabel = "", rawFile, list = ""] = match;
-        const { lead, file } = rawFile ? splitFile(rawFile, env) : { lead: "", file: undefined };
+        const [, matchedLabel = "", atSlash = "", rawFile, list, bareAtSlash = "", bareFile] =
+          match;
+        if (bareFile !== undefined) {
+          const { lead, file } = bareAtSlash
+            ? { lead: "", file: bareFile }
+            : splitFile(bareFile, env);
+          const target = env.resolve(file);
+          if (!target) {
+            pushText(state, children, match[0]);
+            continue;
+          }
+          pushText(state, children, lead);
+          currentFile = file;
+          const open = new state.Token("link_open", "a", 1);
+          open.attrSet(
+            "href",
+            target.revision
+              ? docHref(target.revision.basePath, undefined, undefined, target.revision.id)
+              : docHref(target.path),
+          );
+          open.attrSet("class", "ref");
+          children.push(open);
+          pushText(state, children, target.title ?? target.path);
+          children.push(new state.Token("link_close", "a", -1));
+          continue;
+        }
+
+        if (atSlash && !rawFile) {
+          pushText(state, children, match[0]);
+          continue;
+        }
+        const { lead, file } = rawFile
+          ? atSlash
+            ? { lead: "", file: rawFile }
+            : splitFile(rawFile, env)
+          : { lead: "", file: undefined };
         // A `<label>@` prefix only belongs to the reference when it directly precedes the file.
         const label = lead ? "" : matchedLabel;
         pushText(state, children, lead ? matchedLabel + lead : "");
         if (file) currentFile = file;
         const target = currentFile ? env.resolve(currentFile) : undefined;
         const prefix = `${label}${file ?? ""}:`;
-        list.split("、").forEach((range, position) => {
+        (list ?? "").split("、").forEach((range, position) => {
           if (position > 0) pushText(state, children, "、");
           const text = position === 0 ? `${prefix}${range}` : range;
           const [start = 0, end = start] = range.split(/[–-]/).map(Number);
           if (!target || start < 1 || end < start || end > target.lineCount) {
-            pushText(state, children, text);
+            pushText(state, children, position === 0 && !lead ? `${atSlash}${text}` : text);
             return;
           }
           const open = new state.Token("link_open", "a", 1);
           env.refs?.push({ path: target.path, start, end });
-          open.attrSet("href", docHref(target.path, start, end));
+          open.attrSet(
+            "href",
+            target.revision
+              ? docHref(target.revision.basePath, start, end, target.revision.id)
+              : docHref(target.path, start, end),
+          );
           open.attrSet("class", "ref");
           children.push(open);
           let display =
@@ -110,9 +164,9 @@ function linkRefs(state: StateCore) {
   }
 }
 
-/** Review text: no raw HTML; line references become links into the document viewer. */
-export function createReviewRenderer() {
-  const md = new MarkdownIt({ html: false, linkify: false });
+/** Review text: no raw HTML; line and document references become links into the document viewer. */
+export function createReviewRenderer(options?: { breaks?: boolean }) {
+  const md = new MarkdownIt({ html: false, linkify: false, breaks: options?.breaks ?? false });
   md.core.ruler.push("doc_refs", linkRefs);
   return md;
 }

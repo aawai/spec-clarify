@@ -3,7 +3,9 @@ export {
   loadProjectConfig,
   loadWorkspace,
   SourceError,
+  type DocumentRevision,
   type ProjectConfig,
+  type RevisionConfig,
   type SourceDocument,
   type Workspace,
 } from "./project.js";

@@ -121,7 +121,9 @@ a.ref { white-space: nowrap; }
 
 .excerpts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); align-items: start; gap: 12px; }
 .excerpt { min-width: 0; border: 1px solid var(--separator); border-radius: 4px; overflow: hidden; }
-.excerpt__file { display: block; padding: 8px 12px; font-size: 12px; background: var(--surface-secondary); border-bottom: 1px solid var(--separator); overflow-wrap: anywhere; }
+.excerpt__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; padding: 8px 12px; font-size: 12px; background: var(--surface-secondary); border-bottom: 1px solid var(--separator); }
+.excerpt__file { overflow-wrap: anywhere; font-weight: 500; }
+.excerpt__diff { font-size: 12px; white-space: nowrap; }
 .excerpt__lines { padding: 4px 0; }
 .excerpt__line { display: grid; grid-template-columns: 48px minmax(0, 1fr); font-size: 13px; line-height: 1.7; }
 .excerpt__line.is-hit { background: var(--highlight); }
@@ -132,7 +134,7 @@ a.ref { white-space: nowrap; }
 
 .card.card--default.conclusion { border-color: var(--success); }
 .card.card--default.conclusion.is-stale { border-color: var(--danger); }
-.conclusion__body, .entry__body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.conclusion__body, .entry__body { overflow-wrap: anywhere; }
 .conclusion__meta { font-size: 12px; color: var(--muted); }
 
 .timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -170,8 +172,31 @@ a.ref { white-space: nowrap; }
 .doc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .doc-tile { color: var(--foreground); }
 .doc-tile:hover { text-decoration: none; border-color: var(--accent); }
+.doc-tile__revs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
-/* Markdown content (review item bodies and repository documents) */
+/* Document revisions and diff viewer */
+.rev-tabs { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 12px 0 16px; border-bottom: 1px solid var(--separator); }
+.rev-tabs__link { padding: 6px 2px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.rev-tabs__link:hover { color: var(--foreground); text-decoration: none; }
+.rev-tabs__link[aria-current="true"] { color: var(--foreground); border-bottom-color: var(--accent); }
+.rev-notice { margin-bottom: 14px; padding: 8px 12px; border: 1px solid var(--separator); border-radius: 4px; background: var(--surface-secondary); color: var(--muted); font-size: 13px; }
+
+.diff { border: 1px solid var(--separator); border-radius: 4px; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.6; }
+.diff__row { display: grid; grid-template-columns: 44px 44px 20px minmax(0, 1fr); }
+.diff__row--add { background: oklch(0.95 0.05 145); }
+.diff__row--del { background: oklch(0.95 0.05 25); }
+.diff__num { padding: 0 8px 0 4px; text-align: right; color: var(--muted); font-size: 12px; user-select: none; border-right: 1px solid var(--separator); }
+.diff__sign { text-align: center; color: var(--muted); user-select: none; }
+.diff__row--add .diff__sign { color: oklch(0.45 0.14 145); }
+.diff__row--del .diff__sign { color: oklch(0.48 0.16 25); }
+.diff__code { padding: 0 10px 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff__code del { background: oklch(0.86 0.12 25); text-decoration: none; border-radius: 2px; }
+.diff__code ins { background: oklch(0.86 0.12 145); text-decoration: none; border-radius: 2px; }
+.diff-Hunk-expand { border-top: 1px solid var(--separator); border-bottom: 1px solid var(--separator); }
+.diff-Hunk-expand:first-child { border-top: 0; }
+.diff-Hunk-expand:last-child { border-bottom: 0; }
+.diff__expand { padding: 4px 12px; background: var(--surface-secondary); color: var(--muted); font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif; font-size: 12px; font-weight: 500; }
+.diff-Hunk-expand[open] > .diff__expand { margin-bottom: 0; border-bottom: 1px solid var(--separator); }
 .prose { overflow-wrap: anywhere; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }

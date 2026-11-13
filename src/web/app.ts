@@ -23,6 +23,7 @@ import {
 } from "../clarification.js";
 import { formatTime, renderExport } from "../export.js";
 import { loadWorkspace, SourceError, type ProjectConfig, type Workspace } from "../project.js";
+import { renderDiffHtml } from "../render/diff.js";
 import {
   createDocumentRenderer,
   createReviewRenderer,
@@ -225,6 +226,14 @@ export function createApp(options: AppOptions) {
     const filename = doc.path.split("/").at(-1);
     const configured = config.reviews.some((review) => review.path === doc.path && review.title);
     if (!configured && doc.title === filename && !/^# (.+)$/m.test(doc.source)) return doc.path;
+    if (doc.revision) {
+      const dupes = workspace.documents.filter(
+        (other) => other.path !== doc.revision!.basePath && other.title === doc.title,
+      );
+      return dupes.length > 0
+        ? `${doc.title}（${doc.path}）`
+        : `${doc.title}（${doc.revision.label}）`;
+    }
     return workspace.documents.filter((other) => other.title === doc.title).length > 1
       ? `${doc.title}（${doc.path}）`
       : doc.title;
@@ -244,39 +253,60 @@ export function createApp(options: AppOptions) {
     return html`<section class="card card--default card--padded" id="sources">
       <h2 class="section-title">原文对照</h2>
       <div class="excerpts">
-        ${excerpts.map(
-          (excerpt) =>
-            html`<div class="excerpt">
-              <a class="excerpt__file" href="${docHref(excerpt.path)}"
+        ${excerpts.map((excerpt) => {
+          const doc = workspace.resolve(excerpt.path);
+          const fileHref = doc?.revision
+            ? docHref(doc.revision.basePath, undefined, undefined, doc.revision.id)
+            : docHref(excerpt.path);
+          const baseDoc = doc?.revision
+            ? workspace.documents.find((candidate) => candidate.path === doc.revision!.basePath)
+            : doc;
+          const changedRevs = doc?.revision
+            ? (baseDoc?.revisions ?? []).filter((rev) => rev.id === doc.revision!.id && rev.changed)
+            : (baseDoc?.revisions ?? []).filter((rev) => rev.changed);
+          return html`<div class="excerpt">
+            <div class="excerpt__head">
+              <a class="excerpt__file" href="${fileHref}"
                 >${documentLabel(workspace, excerpt.path)}</a
               >
-              ${excerpt.windows.map((window, index) => {
-                const omittedFrom = (excerpt.windows[index - 1]?.end ?? 0) + 1;
-                return html`${
-                    index
-                      ? html`<a
-                          class="excerpt__gap"
-                          href="${docHref(excerpt.path, omittedFrom, window.start - 1)}"
-                          >省略第 ${omittedFrom}–${window.start - 1} 行，在文档中查看</a
-                        >`
-                      : ""
-                  }
-                  <div class="excerpt__lines">
-                    ${window.lines.map(
-                      (line) =>
-                        html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
-                          <span class="excerpt__number">${line.number}</span
-                          ><span class="excerpt__text">${line.text}</span>
-                        </div>`,
-                    )}
-                  </div>`;
-              })}
-            </div>`,
-        )}
+              ${changedRevs.map(
+                (rev) =>
+                  html`<a
+                    class="excerpt__diff"
+                    href="${`/docs/view?${new URLSearchParams({ path: baseDoc?.path ?? excerpt.path, rev: rev.id, mode: "diff" })}`}"
+                    >查看 ${rev.label} 增量变动</a
+                  >`,
+              )}
+            </div>
+            ${excerpt.windows.map((window, index) => {
+              const omittedFrom = (excerpt.windows[index - 1]?.end ?? 0) + 1;
+              const gapHref = doc?.revision
+                ? docHref(doc.revision.basePath, omittedFrom, window.start - 1, doc.revision.id)
+                : docHref(excerpt.path, omittedFrom, window.start - 1);
+              return html`${
+                  index
+                    ? html`<a class="excerpt__gap" href="${gapHref}"
+                        >省略第 ${omittedFrom}–${window.start - 1} 行，在文档中查看</a
+                      >`
+                    : ""
+                }
+                <div class="excerpt__lines">
+                  ${window.lines.map(
+                    (line) =>
+                      html`<div class="excerpt__line${line.hit ? " is-hit" : ""}">
+                        <span class="excerpt__number">${line.number}</span
+                        ><span class="excerpt__text">${line.text}</span>
+                      </div>`,
+                  )}
+                </div>`;
+            })}
+          </div>`;
+        })}
       </div>
     </section>`;
   }
   const reviewMd = createReviewRenderer();
+  const entryMd = createReviewRenderer({ breaks: true });
   const documentMd = createDocumentRenderer({ trustHtml: config.trustDocumentHtml });
   const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
   const receipts = new Map<
@@ -536,7 +566,15 @@ export function createApp(options: AppOptions) {
     defaultDocument: item.defaultDocument ?? item.group.defaultDocument,
     resolve: (name) => {
       const doc = workspace.resolve(name);
-      return doc ? { ...doc, title: documentLabel(workspace, name) } : undefined;
+      if (!doc) return undefined;
+      return {
+        path: doc.path,
+        lineCount: doc.lineCount,
+        title: documentLabel(workspace, name),
+        revision: doc.revision
+          ? { id: doc.revision.id, basePath: doc.revision.basePath }
+          : undefined,
+      };
     },
   });
   const severity = (value: string) => severityChip(value, config.severities);
@@ -831,7 +869,7 @@ export function createApp(options: AppOptions) {
             <span class="muted">${formatTime(entry.createdAt)}</span>
             ${entry.itemDigest !== item.digest ? staleChip("基于旧版条目") : ""}
           </div>
-          <div class="entry__body">${entry.body}</div>
+          <div class="prose entry__body">${raw(entryMd.render(entry.body, env))}</div>
         </div>
       </li>`;
 
@@ -934,7 +972,9 @@ ${valueFor("clarification")}</textarea>
                   class="card card--default card--padded conclusion ${status === "stale" ? "is-stale" : ""}"
                 >
                   <h2 class="section-title">当前澄清 ${statusChip(status)}</h2>
-                  <div class="conclusion__body">${clarification.body}</div>
+                  <div class="prose conclusion__body">
+                    ${raw(entryMd.render(clarification.body, env))}
+                  </div>
                   <div class="conclusion__meta">
                     ${clarification.author.displayName} · ${formatTime(clarification.createdAt)}
                   </div>
@@ -1087,13 +1127,34 @@ ${valueFor("comment")}</textarea>
             </div>
           </div>
           <div class="doc-grid">
-            ${documents.map(
-              (doc) =>
-                html`<a class="card card--default doc-tile" href="${docHref(doc.path)}">
-                  <span class="card__title">${doc.title}</span>
-                  <span class="card__description mono">${doc.path}</span>
-                </a>`,
-            )}
+            ${documents.map((doc) => {
+              const href = doc.addedInRevision
+                ? docHref(doc.path, undefined, undefined, doc.addedInRevision)
+                : docHref(doc.path);
+              return html`<a class="card card--default doc-tile" href="${href}">
+                <span class="card__title">${doc.title}</span>
+                <span class="card__description mono">${doc.path}</span>
+                ${
+                  doc.revisions?.length
+                    ? html`<span class="doc-tile__revs">
+                        ${doc.revisions.map((rev) =>
+                          doc.addedInRevision === rev.id
+                            ? html`<span class="chip chip--soft chip--accent"
+                                >${rev.label} 新增 · +${rev.stats.added}</span
+                              >`
+                            : rev.changed
+                              ? html`<span class="chip chip--soft chip--accent"
+                                  >${rev.label} · +${rev.stats.added} / -${rev.stats.removed}</span
+                                >`
+                              : html`<span class="chip chip--soft chip--default"
+                                  >${rev.label} · 无变更</span
+                                >`,
+                        )}
+                      </span>`
+                    : ""
+                }
+              </a>`;
+            })}
           </div>`,
       ),
     );
@@ -1102,22 +1163,99 @@ ${valueFor("comment")}</textarea>
   app.get("/docs/view", async (c) => {
     const workspace = await loadWorkspace(config);
     const { documents } = workspace;
-    const doc = documents.find((candidate) => candidate.path === c.req.query("path"));
+    const reqPath = c.req.query("path") ?? "";
+    let doc = documents.find((candidate) => candidate.path === reqPath);
+    let revParam = c.req.query("rev");
+    if (!doc && reqPath) {
+      const resolved = workspace.resolve(reqPath);
+      if (resolved?.revision) {
+        doc = documents.find((candidate) => candidate.path === resolved.revision!.basePath);
+        revParam ??= resolved.revision.id;
+      }
+    }
     if (!doc)
       return message(c, 404, "未找到文档", "没有这份文档。", {
         href: "/docs",
         label: "返回文档列表",
       });
+    const modeParam = c.req.query("mode");
+    if (modeParam !== undefined && modeParam !== "rendered" && modeParam !== "diff") {
+      return message(c, 404, "无效的视图模式", "不支持该视图模式。", {
+        href: docHref(doc.path),
+        label: "查看文档",
+      });
+    }
+    const effectiveRevId = revParam ?? doc.addedInRevision;
+    const activeRevConfig = effectiveRevId
+      ? config.revisions.find((rev) => rev.id === effectiveRevId)
+      : undefined;
+    if (effectiveRevId && !activeRevConfig) {
+      return message(c, 404, "未找到文档版本", `没有编号为 ${effectiveRevId} 的修订版。`, {
+        href: docHref(doc.path),
+        label: "查看基线版本",
+      });
+    }
+    const mode = activeRevConfig && modeParam === "diff" ? "diff" : "rendered";
+    const revs = doc.revisions ?? [];
+    const activeRev = activeRevConfig
+      ? revs.find((rev) => rev.id === activeRevConfig.id)
+      : undefined;
+    const isReviewDoc = config.reviews.some((review) => review.path === doc.path);
+    const showRevSwitcher = !isReviewDoc && (revs.length > 0 || config.revisions.length > 0);
+
+    const activeRevIndex = activeRevConfig
+      ? config.revisions.findIndex((rev) => rev.id === activeRevConfig.id)
+      : -1;
+    const inheritedRev =
+      activeRevConfig && !activeRev
+        ? revs
+            .filter((rev) => {
+              const idx = config.revisions.findIndex((cfg) => cfg.id === rev.id);
+              return idx >= 0 && idx < activeRevIndex;
+            })
+            .at(-1)
+        : undefined;
+    const displaySource = activeRev
+      ? activeRev.source
+      : inheritedRev
+        ? inheritedRev.source
+        : doc.source;
+
     const start = Number(c.req.query("line"));
     const end = Number(c.req.query("end") ?? start);
     const highlight =
-      Number.isInteger(start) && start > 0
+      mode === "rendered" && Number.isInteger(start) && start > 0
         ? { start, end: Number.isInteger(end) && end >= start ? end : start }
         : undefined;
+
+    let diffHtml = "";
+    if (mode === "diff" && activeRev) {
+      const baseRev = activeRev.baseId
+        ? revs.find((rev) => rev.id === activeRev.baseId)
+        : undefined;
+      const baseSource = baseRev
+        ? baseRev.source
+        : doc.addedInRevision === activeRev.id
+          ? undefined
+          : doc.source;
+      diffHtml = renderDiffHtml(baseSource, activeRev.source);
+    }
+
+    const revTabHref = (revId: string | undefined, tabMode: "rendered" | "diff" = "rendered") => {
+      const params = new URLSearchParams({ path: doc.path });
+      if (revId) params.set("rev", revId);
+      if (tabMode === "diff") params.set("mode", "diff");
+      return `/docs/view?${params}`;
+    };
+
+    const addedIdx = doc.addedInRevision
+      ? config.revisions.findIndex((rev) => rev.id === doc.addedInRevision)
+      : -1;
+
     return c.html(
       page(
         c,
-        doc.title,
+        activeRevConfig ? `${doc.title}（${activeRevConfig.label}）` : doc.title,
         "docs",
         html`<div class="docs-layout">
           <nav class="card card--default group-nav" aria-label="文档">
@@ -1125,7 +1263,7 @@ ${valueFor("comment")}</textarea>
               (other) =>
                 html`<a
                   class="group-nav__link"
-                  href="${docHref(other.path)}"
+                  href="${other.addedInRevision ? docHref(other.path, undefined, undefined, other.addedInRevision) : docHref(other.path)}"
                   ${other.path === doc.path ? html`aria-current="true"` : ""}
                   ><span>${documentLabel(workspace, other.path)}</span></a
                 >`,
@@ -1140,20 +1278,82 @@ ${valueFor("comment")}</textarea>
               <span class="breadcrumbs__item muted">${documentLabel(workspace, doc.path)}</span>
             </nav>
             ${
-              highlight
-                ? alert(
-                    "accent",
-                    `已定位到第 ${highlight.start}${highlight.end > highlight.start ? `–${highlight.end}` : ""} 行`,
-                    html`高亮部分即引用位置，<a href="#hl">跳转到高亮处</a
-                      >。左侧数字为源文件行号。`,
-                  )
-                : html`<p class="muted">
-                    左侧数字为源文件行号，与审核文档中的 <code>文件:行号</code> 对应。
-                  </p>`
+              showRevSwitcher
+                ? html`<nav class="rev-tabs" aria-label="文档版本与视图">
+                    ${
+                      doc.addedInRevision
+                        ? ""
+                        : html`<a
+                            class="rev-tabs__link"
+                            href="${revTabHref(undefined)}"
+                            ${!activeRevConfig ? html`aria-current="true"` : ""}
+                            >基线原文</a
+                          >`
+                    }
+                    ${config.revisions.map((revCfg, idx) => {
+                      if (addedIdx > idx) return "";
+                      const hasRev = revs.some((rev) => rev.id === revCfg.id);
+                      const isThisRev = activeRevConfig?.id === revCfg.id;
+                      return html`<a
+                          class="rev-tabs__link"
+                          href="${revTabHref(revCfg.id, "rendered")}"
+                          ${isThisRev && mode === "rendered" ? html`aria-current="true"` : ""}
+                          >${revCfg.label}（渲染视图）</a
+                        >
+                        ${
+                          hasRev
+                            ? html`<a
+                                class="rev-tabs__link"
+                                href="${revTabHref(revCfg.id, "diff")}"
+                                ${isThisRev && mode === "diff" ? html`aria-current="true"` : ""}
+                                >${revCfg.label}（增量 Diff）</a
+                              >`
+                            : ""
+                        }`;
+                    })}
+                  </nav>`
+                : ""
             }
-            <article class="prose doc">
-              ${raw(documentMd.render(doc.source, { highlight }))}
-            </article>
+            ${
+              activeRevConfig && !activeRev
+                ? html`<div class="rev-notice">
+                    ${
+                      inheritedRev
+                        ? `${activeRevConfig.label} 未修改此文档（当前显示 ${inheritedRev.label} 内容）`
+                        : `${activeRevConfig.label} 未修改此文档（当前显示基线内容）`
+                    }
+                  </div>`
+                : ""
+            }
+            ${
+              mode === "diff" && activeRev
+                ? html`<p class="muted">
+                      ${
+                        activeRev.baseId
+                          ? `对比上一修订版（${revs.find((r) => r.id === activeRev.baseId)?.label ?? activeRev.baseId}）→ ${activeRevConfig?.label}`
+                          : doc.addedInRevision === activeRev.id
+                            ? `${activeRevConfig?.label} 新增文档`
+                            : `对比基线 → ${activeRevConfig?.label}`
+                      }（+${activeRev.stats.added}
+                      / -${activeRev.stats.removed}）。左侧两栏依次为旧行号、新行号。
+                    </p>
+                    ${raw(diffHtml)}`
+                : html`${
+                      highlight
+                        ? alert(
+                            "accent",
+                            `已定位到第 ${highlight.start}${highlight.end > highlight.start ? `–${highlight.end}` : ""} 行`,
+                            html`高亮部分即引用位置，<a href="#hl">跳转到高亮处</a
+                              >。左侧数字为源文件行号。`,
+                          )
+                        : html`<p class="muted">
+                            左侧数字为源文件行号，与审核文档中的 <code>文件:行号</code> 对应。
+                          </p>`
+                    }
+                    <article class="prose doc">
+                      ${raw(documentMd.render(displaySource, { highlight }))}
+                    </article>`
+            }
           </div>
         </div>`,
       ),

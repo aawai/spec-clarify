@@ -407,3 +407,105 @@ test("detail forms follow roles and conflicts reopen the update with its draft",
     assert.match(page, /第一版/);
   });
 });
+
+test("docs list, diff viewer, excerpt diff shortcuts, and entry body ref links work under strict CSP", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "spec-clarify-rev-"));
+  await mkdir(join(dir, "specs/v1"), { recursive: true });
+  await mkdir(join(dir, "specs/v2"), { recursive: true });
+  await writeFile(join(dir, "specs/login.md"), "# 登录\n\n输错 5 次锁定。\n第 4 行\n");
+  await writeFile(join(dir, "specs/area.md"), "# 区域\n\n未改变。\n");
+  await writeFile(
+    join(dir, "specs/v1/login.md"),
+    "# 登录\n\n输错 3 次锁定。\n第 4 行\n新增第 5 行\n",
+  );
+  await writeFile(
+    join(dir, "specs/v2/login.md"),
+    "# 登录\n\n输错 3 次锁定 15 分钟。\n第 4 行\n新增第 5 行\n",
+  );
+  await writeFile(join(dir, "review.md"), REVIEW);
+  await writeFile(
+    join(dir, "spec-clarify.config.json"),
+    JSON.stringify({
+      documents: ["specs/**/*.md"],
+      revisions: [
+        { id: "v1", label: "V1", dir: "specs/v1" },
+        { id: "v2", label: "V2", dir: "specs/v2" },
+      ],
+      reviews: [{ path: "review.md" }],
+      database: "db.sqlite",
+    }),
+  );
+  const config = await loadProjectConfig(join(dir, "spec-clarify.config.json"));
+  const client = await openDatabase(config.databasePath);
+  try {
+    const users = new UserStore(client);
+    const passwordHash = await hashPassword("password-1");
+    await users.create({ username: "pm", displayName: "产品", role: "product", passwordHash });
+    const app = createApp({ config, entries: new EntryStore(client), users });
+    const pm = await signIn(app, "pm");
+
+    // /docs aggregates logical documents and shows diff stats chips
+    const docsRes = await app.request("/docs", { headers: { Cookie: pm } });
+    assert.equal(docsRes.status, 200);
+    const docsHtml = await docsRes.text();
+    assert.match(docsHtml, /V1 · \+2 \/ -1/);
+    assert.match(docsHtml, /V2 · \+1 \/ -1/);
+    assert.equal(docsHtml.match(/specs\/login\.md/g)?.length, 1);
+    assert.doesNotMatch(docsHtml, /specs\/v1\/login\.md/);
+
+    // /docs/view diff mode for V1 and V2 (V2 diffs against V1)
+    const v1DiffRes = await app.request("/docs/view?path=specs/login.md&rev=v1&mode=diff", {
+      headers: { Cookie: pm },
+    });
+    assert.equal(v1DiffRes.status, 200);
+    assert.match(v1DiffRes.headers.get("Content-Security-Policy") ?? "", /script-src 'none'/);
+    const v1DiffHtml = await v1DiffRes.text();
+    assert.match(v1DiffHtml, /<del>5<\/del>/);
+    assert.match(v1DiffHtml, /<ins>3<\/ins>/);
+
+    const v2DiffHtml = await (
+      await app.request("/docs/view?path=specs/login.md&rev=v2&mode=diff", {
+        headers: { Cookie: pm },
+      })
+    ).text();
+    assert.match(v2DiffHtml, /对比上一修订版（V1）→ V2/);
+    assert.match(v2DiffHtml, /<ins> 15 分钟<\/ins>/);
+
+    // Unchanged document in V1 shows notice
+    const areaV1Html = await (
+      await app.request("/docs/view?path=specs/area.md&rev=v1", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(areaV1Html, /V1 未修改此文档（当前显示基线内容）/);
+
+    // Unknown revision returns 404
+    const missingRev = await app.request("/docs/view?path=specs/login.md&rev=v99", {
+      headers: { Cookie: pm },
+    });
+    assert.equal(missingRev.status, 404);
+
+    // Item page: excerpt header links to V1 diff, and clarification body links doc refs without raw HTML
+    const { digest } = await formValues(app, pm, "A1");
+    await post(app, pm, "/items/A1/clarifications", {
+      body: "请参见 @/specs/v1/login.md 与 login.md:3 <script>x</script>",
+      digest,
+      base: "0",
+    });
+    const itemHtml = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    assert.match(
+      itemHtml,
+      /href="\/docs\/view\?path=specs%2Flogin\.md&amp;rev=v1&amp;mode=diff"[^>]*>查看 V1 增量变动<\/a\s*>/,
+    );
+    assert.match(
+      itemHtml,
+      /href="\/docs\/view\?path=specs%2Flogin\.md&amp;rev=v1" class="ref">登录（V1）<\/a>/,
+    );
+    assert.match(
+      itemHtml,
+      /href="\/docs\/view\?path=specs%2Flogin\.md&amp;line=3&amp;end=3#hl" class="ref">登录:3<\/a>/,
+    );
+    assert.doesNotMatch(itemHtml, /<script>x<\/script>/);
+  } finally {
+    client.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

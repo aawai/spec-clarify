@@ -81,3 +81,92 @@ test("rejects a review listed twice or outside the project", async () => {
     assert.rejects(loadProjectConfig(path), /lies outside the project/),
   );
 });
+
+test("revisions pair onto baseline docs, exclude rev dirs from baseline glob, and keep short names anchored to baseline", async () => {
+  await withProject(
+    {
+      "reviews/login.md": LOGIN_REVIEW,
+      "prd/account.md": "# 账号\n\n第 1 条\n第 2 条\n",
+      "prd/area.md": "# 区域\n\n保持不变\n",
+      "prd/v1/account.md": "# 账号\n\n第 1 条（改）\n第 2 条\n第 3 条\n",
+      "prd/v1/added.md": "# 新增文档\n\n内容\n",
+      "prd/v2/account.md": "# 账号\n\n第 1 条（改）\n第 2 条（V2）\n第 3 条\n",
+    },
+    {
+      documents: ["prd/**/*.md"],
+      revisions: [
+        { id: "v1", label: "V1", dir: "prd/v1" },
+        { id: "v2", label: "V2", dir: "prd/v2" },
+      ],
+      reviews: [{ path: "reviews/login.md" }],
+    },
+    async (configPath) => {
+      const workspace = await loadWorkspace(await loadProjectConfig(configPath));
+      assert.deepEqual(
+        workspace.documents.map((doc) => doc.path),
+        ["prd/account.md", "prd/area.md", "prd/v1/added.md", "reviews/login.md"],
+      );
+      const account = workspace.resolve("account.md");
+      assert.equal(account?.path, "prd/account.md");
+      assert.equal(account?.revisions?.length, 2);
+      assert.deepEqual(account?.revisions?.[0]?.stats, { added: 2, removed: 1 });
+      assert.equal(account?.revisions?.[0]?.baseId, undefined);
+      // v2 diffs against v1 (not baseline)
+      assert.deepEqual(account?.revisions?.[1]?.stats, { added: 1, removed: 1 });
+      assert.equal(account?.revisions?.[1]?.baseId, "v1");
+
+      const v1View = workspace.resolve("prd/v1/account.md");
+      assert.equal(v1View?.path, "prd/v1/account.md");
+      assert.deepEqual(v1View?.revision, { id: "v1", label: "V1", basePath: "prd/account.md" });
+      assert.equal(workspace.resolve("v1/account.md")?.path, "prd/v1/account.md");
+
+      // Newly added revision-only doc is resolvable by path, not short basename
+      assert.equal(workspace.resolve("prd/v1/added.md")?.addedInRevision, "v1");
+      assert.equal(workspace.resolve("added.md"), undefined);
+    },
+  );
+});
+
+test("rejects invalid revision configs and missing revision directories", async () => {
+  await withProject(
+    { "a.md": LOGIN_REVIEW },
+    {
+      revisions: [{ id: "v1", label: "V1", dir: "../outside" }],
+      reviews: [{ path: "a.md" }],
+    },
+    (path) => assert.rejects(loadProjectConfig(path), /outside the project/),
+  );
+  await withProject(
+    { "a.md": LOGIN_REVIEW },
+    {
+      revisions: [
+        { id: "v1", label: "V1", dir: "prd/v1" },
+        { id: "v1", label: "V1-dup", dir: "prd/v2" },
+      ],
+      reviews: [{ path: "a.md" }],
+    },
+    (path) => assert.rejects(loadProjectConfig(path), /duplicated/),
+  );
+  await withProject(
+    { "reviews/a.md": LOGIN_REVIEW },
+    {
+      revisions: [{ id: "v1", label: "V1", dir: "reviews" }],
+      reviews: [{ path: "reviews/a.md" }],
+    },
+    (path) => assert.rejects(loadProjectConfig(path), /overlaps review/),
+  );
+  await withProject(
+    { "a.md": LOGIN_REVIEW },
+    {
+      revisions: [{ id: "v1", label: "V1", dir: "prd/v1" }],
+      reviews: [{ path: "a.md" }],
+    },
+    async (path) => {
+      const config = await loadProjectConfig(path);
+      await assert.rejects(
+        loadWorkspace(config),
+        (err) => err instanceof SourceError && /prd\/v1/.test(err.message),
+      );
+    },
+  );
+});
