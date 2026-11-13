@@ -112,7 +112,9 @@ export function layout(options: LayoutOptions, body: Html): Html {
       <body>
         <header class="app-header">
           <div class="app-header__inner">
-            <a class="brand" href="/">${siteTitle}</a>
+            <a class="brand" href="/"
+              ><span class="brand__mark" aria-hidden="true">SC</span><span>${siteTitle}</span></a
+            >
             ${
               user
                 ? html`<nav class="app-nav" aria-label="主导航">

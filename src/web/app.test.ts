@@ -509,3 +509,89 @@ test("docs list, diff viewer, excerpt diff shortcuts, and entry body ref links w
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("default view omits filter-reset chrome, empty pending queue links to all, and comments auto-open history", async () => {
+  await withSite(async ({ app }) => {
+    const pm = await signIn(app, "pm");
+    const dev = await signIn(app, "dev");
+
+    const pmHome = await (await app.request("/", { headers: { Cookie: pm } })).text();
+    assert.doesNotMatch(pmHome, /清除筛选/);
+    const devHome = await (await app.request("/", { headers: { Cookie: dev } })).text();
+    assert.doesNotMatch(devHome, /清除筛选/);
+
+    const defaultDetail = await (
+      await app.request("/items/A1?status=pending", { headers: { Cookie: pm } })
+    ).text();
+    assert.doesNotMatch(defaultDetail, /澄清条目（筛选结果）/);
+
+    const filteredList = await (
+      await app.request("/?status=all", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(filteredList, /清除筛选/);
+    const filteredDetail = await (
+      await app.request("/items/A1?status=all", { headers: { Cookie: pm } })
+    ).text();
+    assert.match(filteredDetail, /澄清条目（筛选结果）/);
+
+    // One clarification without comments keeps 处理记录 collapsed; adding a comment opens it.
+    const a1 = await formValues(app, pm, "A1");
+    await post(app, pm, "/items/A1/clarifications", {
+      body: "15 分钟",
+      digest: a1.digest,
+      base: "0",
+    });
+    const clarified = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    assert.match(
+      clarified,
+      /<details[^>]*class="card card--default card--padded"[^>]*>\s*<summary class="section-title">处理记录（1）/,
+    );
+    assert.doesNotMatch(
+      clarified,
+      /<details[^>]*\sopen\s*>\s*<summary class="section-title">处理记录（1）/,
+    );
+
+    await post(app, dev, "/items/A1/comments", { body: "需记日志吗？", digest: a1.digest });
+    const commented = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    assert.match(
+      commented,
+      /<details[^>]*\sopen\s*>\s*<summary class="section-title">处理记录（2）/,
+    );
+
+    // Reply to A1 and clarify A2/A3 so product's pending queue becomes empty.
+    const a1Updated = await formValues(app, pm, "A1");
+    await post(app, pm, "/items/A1/clarifications", {
+      body: "15 分钟，记日志",
+      digest: a1Updated.digest,
+      base: a1Updated.base ?? "0",
+    });
+    for (const id of ["A2", "A3"]) {
+      const values = await formValues(app, pm, id);
+      await post(app, pm, `/items/${id}/clarifications`, {
+        body: "已明确",
+        digest: values.digest,
+        base: values.base ?? "0",
+      });
+    }
+    const emptyPending = await (await app.request("/", { headers: { Cookie: pm } })).text();
+    assert.match(emptyPending, /当前没有待处理的条目/);
+    assert.match(emptyPending, /href="\/\?status=all"[^>]*>查看全部条目/);
+  });
+});
+
+test("shell brand mark, login heading hierarchy, and item-head title-first order render cleanly", async () => {
+  await withSite(async ({ app }) => {
+    const loginHtml = await (await app.request("/login")).text();
+    assert.match(loginHtml, /<span class="brand__mark"[^>]*>SC<\/span>/);
+    assert.match(loginHtml, /<p class="login-head__site">[^<]+<\/p>\s*<h1>登录<\/h1>/);
+
+    const pm = await signIn(app, "pm");
+    const detail = await (await app.request("/items/A1", { headers: { Cookie: pm } })).text();
+    assert.match(
+      detail,
+      /<header class="item-head">\s*<h1>锁定时长<\/h1>\s*<div class="item-head__meta">/,
+    );
+    const headMeta = /<div class="item-head__meta">([\s\S]*?)<\/div>/.exec(detail)?.[1] ?? "";
+    assert.doesNotMatch(headMeta, /审核 · 登录/);
+  });
+});

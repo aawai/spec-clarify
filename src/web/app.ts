@@ -119,12 +119,16 @@ interface FormState {
   body: string;
 }
 
+function defaultStatus(user: User): ListStatus {
+  return canClarify(user.role) ? "pending" : "all";
+}
+
 function parseFilter(c: Context<Env>): ListFilter {
   const parsed = ListQuery.safeParse(c.req.query());
   const filter = parsed.success ? parsed.data : {};
   return {
     ...filter,
-    status: filter.status ?? (canClarify(session(c).user.role) ? "pending" : "all"),
+    status: filter.status ?? defaultStatus(session(c).user),
   };
 }
 
@@ -140,8 +144,13 @@ function filterSearch(filter: ListFilter, overrides: Partial<ListFilter> = {}): 
   return search ? `?${search}` : "";
 }
 
-function hasFilter(filter: ListFilter): boolean {
-  return FILTER_KEYS.some((key) => Boolean(filter[key]));
+function hasActiveFilter(filter: ListFilter, user: User): boolean {
+  return Boolean(
+    filter.group ||
+    filter.severity ||
+    filter.q ||
+    (filter.status && filter.status !== defaultStatus(user)),
+  );
 }
 
 function matchesQuery(item: ReviewItem, q: string): boolean {
@@ -386,9 +395,12 @@ export function createApp(options: AppOptions) {
         html`<form
           method="post"
           action="/login"
-          class="card card--default card--padded form narrow"
+          class="card card--default card--padded form narrow login-card"
         >
-          <h1>登录 ${config.title}</h1>
+          <div class="login-head">
+            <p class="login-head__site">${config.title}</p>
+            <h1>登录</h1>
+          </div>
           ${error ? alert("danger", error) : ""}
           <input type="hidden" name="next" value="${next}" />
           <label class="field">
@@ -583,7 +595,9 @@ export function createApp(options: AppOptions) {
     const workspace = await loadWorkspace(config);
     const { review, reviews } = workspace;
     const activity = await entries.activity();
+    const { user } = session(c);
     const filter = parseFilter(c);
+    const activeFilter = hasActiveFilter(filter, user);
     const states = new Map(
       review.items.map((item) => [item.id, itemState(item, activity.get(item.id))]),
     );
@@ -681,11 +695,18 @@ export function createApp(options: AppOptions) {
                   const { status, awaitingReply } = state(item);
                   return html`<tr class="table__row">
                     <td class="table__cell col-id mono">${item.id}</td>
-                    <td class="table__cell">
+                    <td class="table__cell col-title">
                       <a class="item-link" href="/items/${encodeURIComponent(item.id)}${itemSearch}"
                         >${plain(item.title)}</a
                       >
-                      ${filter.group ? "" : html`<span class="item-group">${groupLabel(workspace, item.group.title, item.group)}</span>`}
+                      ${
+                        !filter.group || item.severity
+                          ? html`<div class="item-meta">
+                              ${item.severity ? html`<span class="item-severity-mobile">${severity(item.severity)}</span>` : ""}
+                              ${filter.group ? "" : html`<span>${groupLabel(workspace, item.group.title, item.group)}</span>`}
+                            </div>`
+                          : ""
+                      }
                     </td>
                     <td class="table__cell col-chip">
                       ${item.severity ? severity(item.severity) : ""}
@@ -711,7 +732,11 @@ export function createApp(options: AppOptions) {
             </table>
           </div>
         </div>`
-      : emptyState("没有符合条件的条目。", { href: "/", label: "清除筛选" });
+      : activeFilter
+        ? emptyState("没有符合条件的条目。", { href: "/", label: "清除筛选" })
+        : review.items.length
+          ? emptyState("当前没有待处理的条目。", { href: "/?status=all", label: "查看全部条目" })
+          : emptyState("审核文档中暂无条目。");
 
     return c.html(
       page(
@@ -767,8 +792,8 @@ export function createApp(options: AppOptions) {
                   placeholder="搜索编号或关键词"
                   aria-label="关键词"
                 />
-                <button class="button button--primary" type="submit">搜索</button>
-                ${hasFilter(filter) ? html`<a class="button button--ghost" href="/">清除筛选</a>` : ""}
+                <button class="button button--primary" type="submit">筛选</button>
+                ${activeFilter ? html`<a class="button button--ghost" href="/">清除筛选</a>` : ""}
                 <span class="result-count">显示 ${items.length} / ${review.items.length} 条</span>
               </form>
               ${table}
@@ -900,7 +925,7 @@ export function createApp(options: AppOptions) {
               >
 ${valueFor("clarification")}</textarea>
               <span class="field__hint"
-                >以 ${user.displayName} 的名义提交。记录只追加，更正请再提交一次。</span
+                >${status === "stale" ? "审核文档已修改，请对照上方「当前澄清」调整后重新提交。" : `以 ${user.displayName} 的名义提交。记录只追加，更正请再提交一次。`}</span
               >
             </label>
             ${
@@ -931,7 +956,7 @@ ${valueFor("clarification")}</textarea>
         <nav class="breadcrumbs" aria-label="位置">
           <span class="breadcrumbs__item"
             ><a class="breadcrumbs__link" href="/${search}"
-              >${hasFilter(filter) ? "澄清条目（筛选结果）" : "澄清条目"}</a
+              >${hasActiveFilter(filter, user) ? "澄清条目（筛选结果）" : "澄清条目"}</a
             ></span
           >
           <span class="breadcrumbs__separator" aria-hidden="true">/</span>
@@ -950,39 +975,19 @@ ${valueFor("clarification")}</textarea>
         </nav>
       </div>
       <header class="item-head">
+        <h1>${plain(item.title)}</h1>
         <div class="item-head__meta">
           <span class="chip chip--default chip--id">${item.id}</span>
           ${statusChip(status)} ${awaitingReply ? awaitingChip() : ""}
           ${item.severity ? severity(item.severity) : ""}
-          <span class="muted">${item.group.label}</span>
-          <span class="muted">·</span>
           <a href="${docHref(item.group.source, item.line, item.endLine)}"
             >${documentLabel(workspace, item.group.source)} 第 ${item.line} 行</a
           >
         </div>
-        <h1>${plain(item.title)}</h1>
       </header>
       ${status === "stale" ? alert("danger", "本条目在最近一次澄清后已修改", "请核对审核文档的最新内容，确认澄清是否仍然成立并重新提交。") : ""}
       ${showReceipt ? html`<div class="alert alert--success" role="status">澄清已保存。<a href="/items/${encodeURIComponent(receipt.previous)}${search}#entry-${receipt.entryId}">返回上一条查看记录</a>${receipt.previous === id ? "；当前筛选中没有下一条。" : ""}</div>` : ""}
       <div class="detail-layout">
-        <aside class="detail-side">
-          ${
-            clarification
-              ? html`<section
-                  class="card card--default card--padded conclusion ${status === "stale" ? "is-stale" : ""}"
-                >
-                  <h2 class="section-title">当前澄清 ${statusChip(status)}</h2>
-                  <div class="prose conclusion__body">
-                    ${raw(entryMd.render(clarification.body, env))}
-                  </div>
-                  <div class="conclusion__meta">
-                    ${clarification.author.displayName} · ${formatTime(clarification.createdAt)}
-                  </div>
-                </section>`
-              : ""
-          }
-          ${clarifyForm}
-        </aside>
         <div class="detail-main">
           <section class="card card--default card--padded">
             <h2 class="section-title">审核意见</h2>
@@ -1002,7 +1007,10 @@ ${valueFor("clarification")}</textarea>
             ${backlinks.length ? html`<div class="links-row"><span class="muted">被以下条目引用</span>${idLinks(backlinks)}</div>` : ""}
           </section>
           ${excerpts.length ? excerptsView(excerpts, workspace) : ""}
-          <details class="card card--default card--padded">
+          <details
+            class="card card--default card--padded"
+            ${awaitingReply || history.some((entry) => entry.kind === "comment") || history.length > 1 ? "open" : ""}
+          >
             <summary class="section-title">处理记录（${history.length}）</summary>
             ${
               history.length
@@ -1037,6 +1045,24 @@ ${valueFor("comment")}</textarea>
             </form>
           </details>
         </div>
+        <aside class="detail-side">
+          ${
+            clarification
+              ? html`<section
+                  class="card card--default card--padded conclusion ${status === "stale" ? "is-stale" : ""}"
+                >
+                  <h2 class="section-title">当前澄清 ${statusChip(status)}</h2>
+                  <div class="prose conclusion__body">
+                    ${raw(entryMd.render(clarification.body, env))}
+                  </div>
+                  <div class="conclusion__meta">
+                    ${clarification.author.displayName} · ${formatTime(clarification.createdAt)}
+                  </div>
+                </section>`
+              : ""
+          }
+          ${clarifyForm}
+        </aside>
       </div>`;
     return c.html(page(c, item.id, "items", body), httpStatus);
   };
