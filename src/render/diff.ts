@@ -311,3 +311,59 @@ export function renderDiffHtml(oldSource: string | undefined, newSource: string)
 
   return `<div class="diff" role="region" aria-label="变更对比">${chunks.join("")}</div>`;
 }
+
+export interface UnifiedDiffOptions {
+  oldLabel?: string;
+  newLabel?: string;
+  contextLines?: number;
+}
+
+/**
+ * Renders a standard plain-text unified diff (`---`/`+++` + `@@` hunks) over `diffLines`.
+ * Returns an empty string when there are no changes.
+ */
+export function formatUnifiedDiff(
+  oldSource: string | undefined,
+  newSource: string,
+  options?: UnifiedDiffOptions,
+): string {
+  const lines = diffLines(oldSource, newSource);
+  if (!lines.some((line) => line.type !== "equal")) return "";
+
+  const context = Math.max(0, options?.contextLines ?? CONTEXT_LINES);
+  const ranges: Array<{ from: number; to: number }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.type === "equal") continue;
+    const from = Math.max(0, i - context);
+    const to = Math.min(lines.length - 1, i + context);
+    const prev = ranges.at(-1);
+    if (prev && from <= prev.to + 1) {
+      prev.to = to;
+    } else {
+      ranges.push({ from, to });
+    }
+  }
+
+  const oldLabel = options?.oldLabel ?? (oldSource === undefined ? "/dev/null" : "a");
+  const newLabel = options?.newLabel ?? "b";
+  const out = [`--- ${oldLabel}`, `+++ ${newLabel}`];
+
+  for (const { from, to } of ranges) {
+    const slice = lines.slice(from, to + 1);
+    const oldCount = slice.filter((line) => line.type !== "add").length;
+    const newCount = slice.filter((line) => line.type !== "del").length;
+    const firstOld = slice.find((line) => line.oldLine !== undefined)?.oldLine;
+    const firstNew = slice.find((line) => line.newLine !== undefined)?.newLine;
+    const prevOld = from > 0 ? (lines[from - 1]?.oldLine ?? 0) : 0;
+    const prevNew = from > 0 ? (lines[from - 1]?.newLine ?? 0) : 0;
+    const oldStart = firstOld ?? prevOld;
+    const newStart = firstNew ?? prevNew;
+    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+    for (const line of slice) {
+      const prefix = line.type === "add" ? "+" : line.type === "del" ? "-" : " ";
+      out.push(`${prefix}${line.text}`);
+    }
+  }
+
+  return `${out.join("\n")}\n`;
+}

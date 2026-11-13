@@ -1,6 +1,6 @@
 {
   "name": "spec-clarify",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "把审核意见逐条交给产品方澄清并保留完整记录的自托管站点",
   "license": "Apache-2.0",
   "repository": {
@@ -11,7 +11,8 @@
     "spec-clarify": "./dist/cli.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "type": "module",
   "exports": {
@@ -35,6 +36,7 @@
     "@heroui/styles": "^3.2.7",
     "@hono/node-server": "^2.1.6",
     "@libsql/client": "^0.18.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "hono": "^4.13.16",
     "markdown-it": "^14.3.3",
     "zod": "^4.6.7"

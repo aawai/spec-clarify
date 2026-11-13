@@ -1,6 +1,12 @@
 import { itemState, STATUS_LABELS, STATUSES } from "./clarification.js";
 import type { Review } from "./review/model.js";
-import { ENTRY_LABELS, type Entry, type ItemActivity } from "./store/entries.js";
+import {
+  ENTRY_LABELS,
+  RESOLUTION_LABELS,
+  type Entry,
+  type ItemActivity,
+  type Resolution,
+} from "./store/entries.js";
 
 function tableCell(text: string): string {
   return text.replace(/\r?\n/g, "<br>").replace(/(?<!\\)\|/g, "\\|");
@@ -21,6 +27,7 @@ export interface ExportInput {
   /** Every entry, in ID order per item. */
   entries: Entry[];
   activity: Map<string, ItemActivity>;
+  resolutions?: Resolution[];
   generatedAt: Date;
 }
 
@@ -33,6 +40,10 @@ export function renderExport(input: ExportInput): string {
   const byItem = new Map<string, Entry[]>();
   for (const entry of input.entries) {
     byItem.set(entry.itemId, [...(byItem.get(entry.itemId) ?? []), entry]);
+  }
+  const resolutionsByItem = new Map<string, Resolution[]>();
+  for (const res of input.resolutions ?? []) {
+    resolutionsByItem.set(res.itemId, [...(resolutionsByItem.get(res.itemId) ?? []), res]);
   }
   const state = (id: string) => {
     const item = review.items.find((candidate) => candidate.id === id);
@@ -70,10 +81,10 @@ export function renderExport(input: ExportInput): string {
       "| --- | --- | --- | --- | --- |",
     );
     for (const item of items) {
-      const { status, awaitingReply } = state(item.id);
+      const { status, awaitingReply, applied } = state(item.id);
       const clarification = activity.get(item.id)?.latestClarification;
       out.push(
-        `| ${item.id} | ${tableCell(item.title)} | ${STATUS_LABELS[status]}${awaitingReply ? "（待回复）" : ""} | ${tableCell(
+        `| ${item.id} | ${tableCell(item.title)} | ${STATUS_LABELS[status]}${awaitingReply ? "（待回复）" : ""}${applied ? "（已落地）" : ""} | ${tableCell(
           clarification?.body ?? "",
         )} | ${
           clarification
@@ -84,14 +95,21 @@ export function renderExport(input: ExportInput): string {
     }
     for (const item of items) {
       const history = byItem.get(item.id);
-      if (!history) continue;
+      const itemResolutions = resolutionsByItem.get(item.id);
+      if (!history && !itemResolutions) continue;
       out.push("", `### ${item.id} ${item.title.replace(/\r?\n/g, " ")}`, "");
-      for (const entry of history) {
+      for (const entry of history ?? []) {
         const stale = entry.itemDigest === item.digest ? "" : "（基于历史版本）";
         const quoted = entry.body.split(/\r?\n/).map((line) => `  > ${line}`);
         out.push(
           `- ${formatTime(entry.createdAt)} ${entry.author.displayName} ${ENTRY_LABELS[entry.kind]}${stale}：`,
           ...quoted,
+        );
+      }
+      for (const res of itemResolutions ?? []) {
+        const noteSuffix = res.note ? `：${res.note}` : "";
+        out.push(
+          `- ${formatTime(res.createdAt)} ${res.actor} ${RESOLUTION_LABELS[res.action]}（针对澄清 #${res.clarificationId}）${noteSuffix}`,
         );
       }
     }

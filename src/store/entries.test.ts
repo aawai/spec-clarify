@@ -66,16 +66,90 @@ test("a clarification based on an outdated answer is rejected and reports the ne
 
 test("comments never conflict; a comment after the latest clarification awaits a reply", async () => {
   await withStore(async (entries, users) => {
-    assert.deepEqual(await stateOf(entries), { status: "open", awaitingReply: false });
+    assert.deepEqual(await stateOf(entries), {
+      status: "open",
+      awaitingReply: false,
+      applied: false,
+    });
     assert.ok((await entries.add({ ...clarification({ userId: users.a }), kind: "comment" })).ok);
-    assert.deepEqual(await stateOf(entries), { status: "open", awaitingReply: true });
+    assert.deepEqual(await stateOf(entries), {
+      status: "open",
+      awaitingReply: true,
+      applied: false,
+    });
 
     const answer = await entries.add(clarification({ userId: users.a }));
     assert.ok(answer.ok);
-    assert.deepEqual(await stateOf(entries), { status: "clarified", awaitingReply: false });
-    assert.deepEqual(await stateOf(entries, "d2"), { status: "stale", awaitingReply: false });
+    assert.deepEqual(await stateOf(entries), {
+      status: "clarified",
+      awaitingReply: false,
+      applied: false,
+    });
+    assert.deepEqual(await stateOf(entries, "d2"), {
+      status: "stale",
+      awaitingReply: false,
+      applied: false,
+    });
 
     assert.ok((await entries.add({ ...clarification({ userId: users.b }), kind: "comment" })).ok);
-    assert.deepEqual(await stateOf(entries), { status: "clarified", awaitingReply: true });
+    assert.deepEqual(await stateOf(entries), {
+      status: "clarified",
+      awaitingReply: true,
+      applied: false,
+    });
+  });
+});
+
+test("resolutions track applied clarifications, reject stale IDs, and clear on newer clarifications or stale items", async () => {
+  await withStore(async (entries, users) => {
+    const before = await entries.resolve({ itemId: "C1", action: "applied", actor: "ai" });
+    assert.deepEqual(before, { ok: false, reason: "no_clarification" });
+
+    const first = await entries.add(clarification({ userId: users.a }));
+    assert.ok(first.ok);
+
+    const applied = await entries.resolve({
+      itemId: "C1",
+      action: "applied",
+      actor: "claude",
+      note: "已更新 specs/login.md",
+      clarificationId: first.entry.id,
+    });
+    assert.ok(applied.ok);
+    assert.equal(applied.resolution.clarificationId, first.entry.id);
+    assert.equal((await stateOf(entries)).applied, true);
+    assert.equal((await stateOf(entries, "d2")).applied, false);
+
+    const reopened = await entries.resolve({
+      itemId: "C1",
+      action: "reopened",
+      actor: "dev",
+      note: "需要回滚",
+    });
+    assert.ok(reopened.ok);
+    assert.equal((await stateOf(entries)).applied, false);
+
+    const reapplied = await entries.resolve({ itemId: "C1", action: "applied", actor: "ai" });
+    assert.ok(reapplied.ok);
+    assert.equal((await stateOf(entries)).applied, true);
+
+    const second = await entries.add(
+      clarification({ userId: users.b, body: "补充要求", baseClarificationId: first.entry.id }),
+    );
+    assert.ok(second.ok);
+    assert.equal((await stateOf(entries)).applied, false);
+
+    const staleAck = await entries.resolve({
+      itemId: "C1",
+      action: "applied",
+      actor: "ai",
+      clarificationId: first.entry.id,
+    });
+    assert.equal(staleAck.ok, false);
+    if (!staleAck.ok && staleAck.reason === "stale_clarification") {
+      assert.equal(staleAck.latest.id, second.entry.id);
+    } else {
+      assert.fail("Expected stale_clarification");
+    }
   });
 });

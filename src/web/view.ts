@@ -30,6 +30,9 @@ export function statusChip(status: ItemStatus): Html {
 export function awaitingChip(): Html {
   return html`<span class="chip chip--soft chip--accent">待回复</span>`;
 }
+export function appliedChip(): Html {
+  return html`<span class="chip chip--soft chip--default">已落地</span>`;
+}
 
 export function severityChip(severity: string, scale: readonly string[]): Html {
   const rank = scale.indexOf(severity);

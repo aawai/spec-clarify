@@ -24,8 +24,8 @@
 
 - spec-clarify 是自托管的审核意见澄清站点：把一个项目的一份或多份 Markdown 审核文档拆成条目，产品方逐条澄清，工程方评论追问，记录只追加、可导出为 Markdown。界面为中文。
 - 运行形态：单个 Node.js 进程加一个 SQLite 文件，一个配置文件 / 数据库对应一个项目；页面服务端渲染，不运行客户端脚本。
-- 分发方式：Apache-2.0 公开仓库，使用方以 git 依赖安装并固定到发布 tag 或具体提交（安装时由 `prepare` 构建 `dist/`）；未发布到 npm，版本以 GitHub Release（tag `v<package.json 版本>`）发布，当前为 `v0.1.8`。
-- 技术栈：TypeScript、Hono（`@hono/node-server`）、Zod、markdown-it、`@libsql/client`（SQLite）、`@heroui/styles` 预编译 CSS；Oxc 工具链使用 Oxlint、Oxfmt 和基于 Rolldown 的 tsdown，类型检查用 TypeScript `tsc`。
+- 分发方式：Apache-2.0 公开仓库，使用方以 git 依赖安装并固定到发布 tag 或具体提交（安装时由 `prepare` 构建 `dist/`）；未发布到 npm，版本以 GitHub Release（tag `v<package.json 版本>`）发布，当前为 `v0.1.9`。
+- 技术栈：TypeScript、Hono（`@hono/node-server`）、Zod、markdown-it、`@libsql/client`（SQLite）、`@heroui/styles` 预编译 CSS、`@modelcontextprotocol/sdk`；Oxc 工具链使用 Oxlint、Oxfmt 和基于 Rolldown 的 tsdown，类型检查用 TypeScript `tsc`。
 
 ## 契约来源
 
@@ -37,23 +37,24 @@
 ## Invariants
 
 - 澄清记录只按条目编号（`item_id`）保存：编号由作者在审核文档中显式书写，在一个项目的所有审核文档中唯一，不得按行序或位置生成；重复编号必须让整个项目加载失败并指出两处位置。
-- `entries` 只追加：数据库触发器拒绝 `UPDATE` / `DELETE`；更正通过再提交一条记录实现。删除条目不删除其记录，导出文件在“已从审核文档移除的条目”中保留历史。
+- `entries` 与 `resolutions` 只追加：数据库触发器拒绝 `UPDATE` / `DELETE`；更正通过再提交一条记录实现。删除条目不删除其记录，导出文件在“已从审核文档移除的条目”中保留历史。
 - 条目 digest 只随内容变化（标题、严重度、字段、正文、`文档` 元数据），空白、换行与表格对齐不影响；`相关` 不计入。澄清所基于的 digest 与当前不同即为“需复核”。
 - 提交澄清必须携带页面上的 digest 与最近一次澄清的 ID（`base`）：任一不符返回 409 并保留草稿，不覆盖他人结论；评论不做此检查。
 - 任意源文档或审核文档无法读取或解析时抛出 `SourceError`，所有页面、提交与导出返回 503，不展示旧数据、不写入。
-- 权限在服务端强制：只有 `product`、`admin` 能提交澄清；未登录请求只能访问登录页与静态样式。会话令牌只存 SHA-256 摘要，密码使用 scrypt；停用账号或改密会结束相应会话。
+- 权限在服务端强制：只有 `product`、`admin` 能提交澄清；未登录请求只能访问登录页与静态样式（仅当配置 `--mcp-token` / `SPEC_CLARIFY_MCP_TOKEN` 时开放 Bearer 鉴权的 `/mcp` 端点，默认只读，仅在显式配置 `--mcp-write` / `SPEC_CLARIFY_MCP_WRITE=1` 时开放 `resolve_items`）。会话令牌只存 SHA-256 摘要，密码使用 scrypt；停用账号或改密会结束相应会话。
 - 页面不执行脚本（CSP `script-src 'none'`、`form-action 'self'`），表单经 CSRF Origin 校验；源文档原始 HTML 仅在 `trustDocumentHtml` 时渲染，审核文本永远不渲染原始 HTML。
 
 ## 架构与数据流
 
-- `src/cli.ts`：命令行入口（`serve`、`check`、`export`、`user`），解析参数与 `SPEC_CLARIFY_*` 环境变量，打开数据库并启动 Hono 服务；收到退出信号时关闭服务和数据库。
+- `src/cli.ts`：命令行入口（`serve`、`check`、`export`、`ack`、`reopen`、`mcp`、`skill`、`user`），解析参数与 `SPEC_CLARIFY_*` 环境变量，打开数据库并启动 Hono 服务或 stdio MCP 服务；收到退出信号时关闭服务和数据库。
 - `src/project.ts`：用 Zod 校验 `spec-clarify.config.json`（路径相对配置文件）；`loadWorkspace` 每次调用都重新读取 `documents` glob、`revisions` 稀疏修订目录与全部 `reviews`，按配置的适配器解析，多份审核文档时把分组归到各自文档标题下，再交给 `buildReview` 合并；提供按精确路径或基线唯一文件名解析文档的 `resolve`。
 - `src/review/model.ts`：`ReviewGroup` / `ReviewItem` 模型；`buildReview` 校验跨文档编号与分组键唯一、解析相关条目、计算 digest。
 - `src/review/adapters/`：`markdown.ts`（默认格式）、`prd-review.ts`（中文 PRD 审核报告版式），在 `index.ts` 中以 Zod 选项 schema 注册；适配器只产出 `ParsedReview`，不做跨文档逻辑。
-- `src/render/markdown.ts`：审核与澄清/评论文本渲染，以及 `文件:行号`、无行号路径和 `@/` 前缀引用链接（可收集已链接的引用）；源文档带行号标注与高亮的渲染。`src/render/excerpt.ts`：按引用截取源文档行及上下文，供条目页“原文对照”。`src/render/diff.ts`：纯服务端渲染的 Unified Diff（双栏行号、行内修改高亮与 `<details>` 折叠）。
-- `src/clarification.ts`：由最近一次澄清与评论推导条目状态（未澄清 / 已澄清 / 需复核）与“待回复”。
-- `src/store/`：`database.ts` 建库与 PRAGMA（WAL、外键、锁等待）；`users.ts` 账号与会话；`entries.ts` 记录、并发检查与活动汇总。
+- `src/render/markdown.ts`：审核与澄清/评论文本渲染，以及 `文件:行号`、无行号路径和 `@/` 前缀引用链接（可收集已链接的引用）；源文档带行号标注与高亮的渲染。`src/render/excerpt.ts`：按引用截取源文档行及上下文，供条目页“原文对照”。`src/render/diff.ts`：纯服务端渲染的 Unified Diff（双栏行号、行内修改高亮与 `<details>` 折叠）以及纯文本 `formatUnifiedDiff`。
+- `src/clarification.ts`：由最近一次澄清、评论与落地回执推导条目状态（未澄清 / 已澄清 / 需复核）、“待回复”与“已落地”。
+- `src/store/`：`database.ts` 建库与 PRAGMA（WAL、外键、锁等待）；`users.ts` 账号与会话；`entries.ts` 记录、落地回执、并发检查与活动汇总。
 - `src/web/`：`app.ts` 路由、登录守卫、表单处理与错误页；`view.ts` 布局与共享组件；`style.ts` HeroUI 样式与站点 CSS（按内容哈希提供、长期缓存）。
+- `src/mcp/`：`query.ts` 查询与可选回执写入层（条目筛选、落地状态、原文对照、修订继承与文本 Diff）；`server.ts` 注册 MCP 工具并提供 `stdio` 与无状态 Streamable HTTP（`/mcp`）接入。
 - `src/export.ts`：导出 Markdown；`src/auth.ts`：密码哈希、会话令牌。
 - 每个请求都重新加载工作区（文档改动刷新即生效，不缓存）；登录失败计数保存在 `createApp` 实例内存中，重启清零。
 

@@ -243,6 +243,9 @@ a.ref { white-space: nowrap; }
 .card.card--default.conclusion.is-stale { border-color: color-mix(in oklab, var(--danger) 35%, var(--separator)); background: color-mix(in oklab, var(--danger) 5%, var(--surface)); }
 .conclusion__body, .entry__body { overflow-wrap: anywhere; }
 .conclusion__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.conclusion__resolution { margin: 8px 0 0; font-size: 12px; }
+.resolution-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--separator); }
+.resolution-form .input { flex: 1 1 160px; min-width: 0; height: 32px; font-size: 13px; }
 
 .timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .entry { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 14px 0; border-top: 1px solid var(--separator); scroll-margin-top: calc(var(--header-height) + 16px); }
