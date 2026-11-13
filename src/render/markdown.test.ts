@@ -91,3 +91,35 @@ test("raw HTML in documents is rendered only when the documents are trusted", ()
     /<font color="red">/,
   );
 });
+
+test("links revision paths with line numbers and bare document paths including @/ prefix", () => {
+  const revDocs = new Map<
+    string,
+    { path: string; lineCount: number; revision?: { id: string; basePath: string } }
+  >([
+    ["prd/account.md", { path: "prd/account.md", lineCount: 100 }],
+    [
+      "prd/v1/account.md",
+      {
+        path: "prd/v1/account.md",
+        lineCount: 120,
+        revision: { id: "v1", basePath: "prd/account.md" },
+      },
+    ],
+  ]);
+  const resolveRev: RefEnv["resolve"] = (name) => revDocs.get(name);
+  const env: RefEnv = { resolve: resolveRev, refs: [] };
+  const rendered = md.renderInline(
+    "见 prd/v1/account.md:20，另参见 prd/v1/account.md 与 @/prd/v1/account.md，忽略 `prd/v1/account.md` 与 https://example.com/prd/v1/account.md",
+    env,
+  );
+  assert.deepEqual(env.refs, [{ path: "prd/v1/account.md", start: 20, end: 20 }]);
+  const anchors = [...rendered.matchAll(/<a href="([^"]+)" class="ref">([^<]+)<\/a>/g)].map(
+    ([, href = "", label]) => `${label} -> ${href.replaceAll("&amp;", "&")}`,
+  );
+  assert.deepEqual(anchors, [
+    "prd/v1/account.md:20 -> /docs/view?path=prd%2Faccount.md&rev=v1&line=20&end=20#hl",
+    "prd/v1/account.md -> /docs/view?path=prd%2Faccount.md&rev=v1",
+    "prd/v1/account.md -> /docs/view?path=prd%2Faccount.md&rev=v1",
+  ]);
+});

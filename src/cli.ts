@@ -88,8 +88,12 @@ async function main(argv: string[]) {
         const count = review.items.filter((item) => item.group === group).length;
         console.log(`${String(count).padStart(5)}  ${group.title}`);
       }
+      const revisionFiles = documents.reduce((sum, doc) => sum + (doc.revisions?.length ?? 0), 0);
+      const revisionNote = config.revisions.length
+        ? `、${config.revisions.length} 个修订集（${revisionFiles} 份修订文件）`
+        : "";
       console.log(
-        `共 ${review.items.length} 个条目、${review.groups.length} 个分组；${reviews.length} 份审核文档、${documents.length - reviews.length} 份源文档`,
+        `共 ${review.items.length} 个条目、${review.groups.length} 个分组；${reviews.length} 份审核文档、${documents.length - reviews.length} 份源文档${revisionNote}`,
       );
       return;
     }
