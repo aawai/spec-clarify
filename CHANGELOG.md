@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-13
+
 ### Added
 
 - 新增只读 MCP 服务（`spec-clarify mcp` 本地 stdio 模式与 `serve --mcp-token` / `SPEC_CLARIFY_MCP_TOKEN` 远程 Streamable HTTP `/mcp` 端点），支持 `list_items`、`get_item`、`list_documents`、`get_document` 与 `diff_document`，供 AI 助手按条件读取澄清结论、源文档版本与纯文本 Unified Diff；提供 `spec-clarify mcp --print-config` 输出 `.mcp.json` 配置片段。

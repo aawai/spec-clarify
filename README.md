@@ -20,7 +20,7 @@ A self-hosted site that turns one or more Markdown reviews of your specs into it
 npm install --save-dev github:aawai/spec-clarify
 ```
 
-npm 12 默认禁止 git 依赖，需要先在项目的 `.npmrc` 中加入 `allow-git=root`。安装时 npm 会自动构建 `dist/`。建议在 `package.json` 中将依赖固定到发布 tag（例如 `github:aawai/spec-clarify#v0.1.8`）或具体提交；本文包含的 MCP 服务、已落地回执与 `skill` 命令等最新能力需使用包含相应提交的版本或后续发布 tag。
+npm 12 默认禁止 git 依赖，需要先在项目的 `.npmrc` 中加入 `allow-git=root`。安装时 npm 会自动构建 `dist/`。建议在 `package.json` 中将依赖固定到发布 tag 或某个提交，例如 `github:aawai/spec-clarify#v0.1.9`。
 
 在项目根目录编写 `spec-clarify.config.json`，按[审核文档格式](#审核文档格式)准备审核文档后运行：
 
